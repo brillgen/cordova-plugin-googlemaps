@@ -1,21 +1,52 @@
-Please describe your question, problem or request as much as possible.
+<!--
+Thank you for supporting the plugin activity ($5 usd).
+https://www.paypal.com/cgi-bin/webscr?cmd=_donations&business=SQPLZJ672HJ9N&lc=US&item_name=Cordova%2dGoogleMaps%2dPlugin&amount=5%2e00&currency_code=USD&bn=PP%2dDonationsBF%3abtn_donate_LG%2egif%3aNonHosted
 
-- What is your question, problem or request?
+If you desire the support by e-mail in private, please contact to wf9a5m75@gmail.com (private support: $100 USD)
+--->
 
-- What version of this plugin do you use? ($> cordova plugin list)
+**I'm submitting a ...**  (check one with "x")
+[ ] question
+[ ] any problem or bug report
+[ ] feature request
 
-- Screen capture or video record?
-(you can upload your files with drag & drop)
+**If you choose 'problem or bug report', please select OS:**  (check one with "x")
+[ ] **Android**
+[ ] **iOS**
 
-- Error log (if possible)
+**cordova information:**  (run `$> cordova plugin list`) 
 
 ```
-(here)
+insert the output from the command here
 ```
 
-- provide your app code
+**If you use `@ionic-native/google-maps`, please tell the package.json (only `@ionic-native/core` and `@ionic-native/google-maps` are fine mostly)**
 
-Please past your code or share your project files.
-You don't want to share your code with public?
-You can share with me on a private repository at the bitbucket as free.
-Please read https://github.com/mapsplugin/cordova-plugin-googlemaps/issues/1479
+**Current behavior:**
+<!-- Describe how the bug manifests. -->
+
+**Expected behavior:**
+<!-- Describe what the behavior would be without the bug. -->
+
+**Screen capture or video record:**
+<!--
+Please take a screen capture or a screen record. You can upload your files with drag & drop up to 10M bytes.
+[Android]
+$> adb shell screenrecord /sdcard/capture.mp4
+$> adb pull /sdcard/capture.mp4 ./
+[iOS]
+Use QuickTimer player on Mac
+--->
+
+**Related code, data or error log (please format your code or data):**
+
+```
+The person who share your project files on Github (or other git repository) is in faster lane than other people.
+Please share your project files on Github or others(Bitbucket, Gitlabs...etc).
+If you don't want to share your project files, please create a demo project, then share it.
+
+Screen captures, and/or native logs(such as Logcat, xcode logs) are appreciate.
+
+Giving much information, you are waiting time is less.
+Thank you for your cooperation.
+```
