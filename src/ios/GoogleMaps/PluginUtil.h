@@ -17,7 +17,8 @@
 //#import "MFGoogleMapAdditions/GMSCoordinateBounds+Geometry.h"
 #import "GMSCoordinateBounds+Geometry.h"
 #import <math.h>
-#import "MyPlgunProtocol.h"
+#import "IPluginProtocol.h"
+#import "PluginViewController.h"
 #import <Cordova/CDVCommandDelegate.h>
 #import <Cordova/CDVCommandDelegateImpl.h>
 
@@ -80,6 +81,7 @@ typedef void (^TIFAnimationGroupCompletionBlock)();
 + (BOOL)isInDebugMode;
 + (GMSMutablePath *)getMutablePathFromCircle:(CLLocationCoordinate2D)center radius:(double)radius;
 + (NSString *)getAbsolutePathFromCDVFilePath:(UIView*)theWebView cdvFilePath:(NSString *)cdvFilePath;
++ (NSString *)PGM_LOCALIZATION:(NSString *)key;
 @end
 
 
@@ -89,4 +91,10 @@ typedef void (^TIFAnimationGroupCompletionBlock)();
     self.enabled = NO;
     self.enabled = YES;
 }
+@end
+
+
+
+@interface CDVPlugin (GoogleMapsPlugin)
+- (void)setPluginViewController: (PluginViewController*)viewCtrl;
 @end

@@ -18,19 +18,19 @@ import org.apache.cordova.CordovaInterface;
 import org.apache.cordova.CordovaPlugin;
 import org.apache.cordova.CordovaWebView;
 import org.apache.cordova.PluginEntry;
-import org.apache.cordova.PluginResult;
 import org.json.JSONArray;
 import org.json.JSONException;
 
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public class MyPlugin extends CordovaPlugin implements MyPluginInterface {
   public MyPlugin self = null;
-  public final ConcurrentHashMap<String, Method> methods = new ConcurrentHashMap<String, Method>();
+  public final Map<String, Method> methods = new ConcurrentHashMap<String, Method>();
   protected static ExecutorService executorService = null;
 
   public CordovaGoogleMaps mapCtrl = null;
@@ -77,7 +77,11 @@ public class MyPlugin extends CordovaPlugin implements MyPluginInterface {
           if (methods.size() == 0) {
             TAG = MyPlugin.this.getServiceName();
             if (!TAG.contains("-")) {
-              mapCtrl.mPluginLayout.pluginMaps.put(TAG, (PluginMap) MyPlugin.this);
+              if (TAG.startsWith("map")) {
+                mapCtrl.mPluginLayout.pluginOverlays.put(TAG, (PluginMap) MyPlugin.this);
+              } else if (TAG.startsWith("streetview")) {
+                mapCtrl.mPluginLayout.pluginOverlays.put(TAG, (PluginStreetViewPanorama) MyPlugin.this);
+              }
             } else {
               PluginEntry pluginEntry = new PluginEntry(TAG, MyPlugin.this);
               pluginMap.plugins.put(TAG, pluginEntry);
@@ -97,7 +101,6 @@ public class MyPlugin extends CordovaPlugin implements MyPluginInterface {
 
           //  this.create(args, callbackContext);
           //  return true;
-          Log.d(TAG, "(debug)action=" + action + " containsKey=" + methods.containsKey(action));
           if (methods.containsKey(action)) {
             if (self.mapCtrl.mPluginLayout.isDebug) {
               try {
