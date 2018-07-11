@@ -1,18 +1,18 @@
 //
-//  Circle.h
+//  PluginCircle.h
 //  cordova-googlemaps-plugin v2
 //
-//  Created by masashi.
+//  Created by Masashi Katsumata.
 //
 //
 
 #import "CordovaGoogleMaps.h"
-#import "MyPlgunProtocol.h"
+#import "IPluginProtocol.h"
 
-@interface PluginCircle : CDVPlugin<MyPlgunProtocol>
-@property (nonatomic) NSMutableDictionary* objects;
-@property (nonatomic, strong) GoogleMapsViewController* mapCtrl;
-@property (nonatomic) NSOperationQueue *executeQueue;
+@interface PluginCircle : CDVPlugin<IPluginProtocol>
+@property (nonatomic, strong) PluginMapViewController* mapCtrl;
+@property (nonatomic) BOOL initialized;
+
 - (void)create:(CDVInvokedUrlCommand*)command;
 - (void)setCenter:(CDVInvokedUrlCommand*)command;
 - (void)setFillColor:(CDVInvokedUrlCommand*)command;

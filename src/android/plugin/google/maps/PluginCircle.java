@@ -12,18 +12,23 @@ import org.json.JSONObject;
 
 public class PluginCircle extends MyPlugin implements MyPluginInterface {
 
+  private String circleHashCode;
+
   /**
    * Create circle
    * @param args
    * @param callbackContext
-   * @throws JSONException 
+   * @throws JSONException
    */
   public void create(final JSONArray args, final CallbackContext callbackContext) throws JSONException {
     final CircleOptions circleOptions = new CircleOptions();
     int color;
     final JSONObject properties = new JSONObject();
-    
+
     JSONObject opts = args.getJSONObject(1);
+    final String hashCode = args.getString(2);
+    circleHashCode = hashCode;
+    
     if (opts.has("center")) {
       JSONObject center = opts.getJSONObject("center");
       circleOptions.center(new LatLng(center.getDouble("lat"), center.getDouble("lng")));
@@ -40,7 +45,7 @@ public class PluginCircle extends MyPlugin implements MyPluginInterface {
       circleOptions.fillColor(color);
     }
     if (opts.has("strokeWidth")) {
-      circleOptions.strokeWidth(opts.getInt("strokeWidth") * this.density);
+      circleOptions.strokeWidth((int)(opts.getDouble("strokeWidth") * density));
     }
     if (opts.has("visible")) {
       circleOptions.visible(opts.getBoolean("visible"));
@@ -63,19 +68,19 @@ public class PluginCircle extends MyPlugin implements MyPluginInterface {
       @Override
       public void run() {
         Circle circle = map.addCircle(circleOptions);
-        String id =  circle.getId();
-        self.objects.put("circle_" + id, circle);
+        circle.setTag(hashCode);
+        pluginMap.objects.put("circle_" + hashCode, circle);
 
-        self.objects.put("circle_property_" + id, properties);
+        pluginMap.objects.put("circle_property_" + hashCode, properties);
 
         // Recalculate the circle bounds
         LatLngBounds bounds = PluginUtil.getBoundsFromCircle(circleOptions.getCenter(), circleOptions.getRadius());
-        self.objects.put("circle_bounds_" + id, bounds);
+        pluginMap.objects.put("circle_bounds_" + hashCode, bounds);
 
         JSONObject result = new JSONObject();
         try {
-          result.put("hashCode", circle.hashCode());
-          result.put("id", "circle_" + id);
+          result.put("hashCode", hashCode);
+          result.put("id", "circle_" + hashCode);
           callbackContext.success(result);
         } catch (JSONException e) {
           e.printStackTrace();
@@ -103,16 +108,16 @@ public class PluginCircle extends MyPlugin implements MyPluginInterface {
       @Override
       public void run() {
         // Recalculate the circle bounds
-        String propertyId = "circle_bounds_" + circle.getId();
+        String propertyId = "circle_bounds_" + circleHashCode;
         LatLngBounds bounds = PluginUtil.getBoundsFromCircle(circle.getCenter(), circle.getRadius());
-        self.objects.put(propertyId, bounds);
+        pluginMap.objects.put(propertyId, bounds);
 
         circle.setCenter(center);
         callbackContext.success();
       }
     });
   }
-  
+
   /**
    * set fill color
    * @param args
@@ -125,7 +130,7 @@ public class PluginCircle extends MyPlugin implements MyPluginInterface {
     int color = PluginUtil.parsePluginColor(args.getJSONArray(1));
     this.setInt("setFillColor", id, color, callbackContext);
   }
-  
+
   /**
    * set stroke color
    * @param args
@@ -138,7 +143,7 @@ public class PluginCircle extends MyPlugin implements MyPluginInterface {
     int color = PluginUtil.parsePluginColor(args.getJSONArray(1));
     this.setInt("setStrokeColor", id, color, callbackContext);
   }
-  
+
   /**
    * set stroke width
    * @param args
@@ -148,10 +153,10 @@ public class PluginCircle extends MyPlugin implements MyPluginInterface {
   @SuppressWarnings("unused")
   public void setStrokeWidth(final JSONArray args, final CallbackContext callbackContext) throws JSONException {
     String id = args.getString(0);
-    float width = (float) args.getDouble(1) * this.density;
+    float width = (float)(args.getDouble(1) * density);
     this.setFloat("setStrokeWidth", id, width, callbackContext);
   }
-  
+
   /**
    * set radius
    * @param args
@@ -169,9 +174,9 @@ public class PluginCircle extends MyPlugin implements MyPluginInterface {
       public void run() {
 
         // Recalculate the circle bounds
-        String propertyId = "circle_bounds_" + circle.getId();
+        String propertyId = "circle_bounds_" + circleHashCode;
         LatLngBounds bounds = PluginUtil.getBoundsFromCircle(circle.getCenter(), circle.getRadius());
-        self.objects.put(propertyId, bounds);
+        pluginMap.objects.put(propertyId, bounds);
 
         // Update the overlay
         circle.setRadius(radius);
@@ -180,7 +185,7 @@ public class PluginCircle extends MyPlugin implements MyPluginInterface {
     });
 
   }
-  
+
   /**
    * set z-index
    * @param args
@@ -213,11 +218,11 @@ public class PluginCircle extends MyPlugin implements MyPluginInterface {
         circle.setVisible(isVisible);
       }
     });
-    String propertyId = "circle_property_" + circle.getId();
-    JSONObject properties = (JSONObject)self.objects.get(propertyId);
+    String propertyId = "circle_property_" + circleHashCode;
+    JSONObject properties = (JSONObject)pluginMap.objects.get(propertyId);
     properties.put("isVisible", isVisible);
-    self.objects.put(propertyId, properties);
-    this.sendNoResult(callbackContext);
+    pluginMap.objects.put(propertyId, properties);
+    callbackContext.success();
   }
 
   /**
@@ -230,10 +235,10 @@ public class PluginCircle extends MyPlugin implements MyPluginInterface {
     String id = args.getString(0);
     final boolean clickable = args.getBoolean(1);
     String propertyId = id.replace("circle_", "circle_property_");
-    JSONObject properties = (JSONObject)self.objects.get(propertyId);
+    JSONObject properties = (JSONObject)pluginMap.objects.get(propertyId);
     properties.put("isClickable", clickable);
-    self.objects.put(propertyId, properties);
-    this.sendNoResult(callbackContext);
+    pluginMap.objects.put(propertyId, properties);
+    callbackContext.success();
   }
   /**
    * Remove the circle
@@ -245,17 +250,17 @@ public class PluginCircle extends MyPlugin implements MyPluginInterface {
     final String id = args.getString(0);
     final Circle circle = this.getCircle(id);
     if (circle == null) {
-      this.sendNoResult(callbackContext);
+      callbackContext.success();
       return;
     }
     cordova.getActivity().runOnUiThread(new Runnable() {
       @Override
       public void run() {
         circle.remove();
-        if (objects != null) {
-          objects.remove(id);
+        if (pluginMap.objects != null) {
+          pluginMap.objects.remove(id);
         }
-        sendNoResult(callbackContext);
+        callbackContext.success();
       }
     });
   }

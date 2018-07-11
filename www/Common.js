@@ -1,6 +1,9 @@
 var BaseArrayClass = require('./BaseArrayClass');
 var utils = require("cordova/utils");
 
+var resolvedPromise = typeof Promise == 'undefined' ? null : Promise.resolve();
+var nextTick = resolvedPromise ? function(fn) { resolvedPromise.then(fn); } : function(fn) { setTimeout(fn); };
+
 //---------------------------
 // Convert HTML color to RGB
 //---------------------------
@@ -21,21 +24,6 @@ function isHTMLColorString(inputValue) {
     return inputValue in HTML_COLORS;
 }
 
-function deleteFromObject(object, type) {
-    if (object === null) return object;
-    if (typeof object !== "object") {
-      return object;
-    }
-    for(var index in Object.keys(object)) {
-        var key = Object.keys(object)[index];
-        if (typeof object[key] === 'object') {
-           object[key] = deleteFromObject(object[key], type);
-        } else if (typeof object[key] === type) {
-           delete object[key];
-        }
-    }
-    return object;
-}
 function HTMLColor2RGBA(colorValue, defaultOpacity) {
     defaultOpacity = !defaultOpacity ? 1.0 : defaultOpacity;
     if (colorValue instanceof Array) {
@@ -195,172 +183,146 @@ function parseBoolean(boolValue) {
 }
 
 function isDom(element) {
-    return !!element &&
-        typeof element === "object" &&
-        "getBoundingClientRect" in element;
+    return element &&
+        element.nodeType === Node.ELEMENT_NODE &&
+        element instanceof SVGElement === false &&
+        typeof element.getBoundingClientRect === "function";
 }
 
 function getDivRect(div) {
     if (!div) {
         return;
     }
-    var rect = div.getBoundingClientRect();
+    var rect;
+    if (div === document.body) {
+      rect = div.getBoundingClientRect();
+      rect.left = Math.max(rect.left, window.pageOffsetX);
+      rect.top = Math.max(rect.top, window.pageOffsetY);
+      rect.width = Math.max(rect.width, window.innerWidth);
+      rect.height = Math.max(rect.height, window.innerHeight);
+      rect.right = rect.left + rect.width;
+      rect.bottom = rect.top + rect.height;
+    } else {
+      rect = div.getBoundingClientRect();
+      if ("right" in rect === false) {
+        rect.right = rect.left + rect.width;
+      }
+      if ("bottom" in rect === false) {
+        rect.bottom = rect.top + rect.height;
+      }
+    }
     return {
       left: rect.left,
       top: rect.top,
       width: rect.width,
-      height: rect.height
+      height: rect.height,
+      right: rect.right,
+      bottom: rect.bottom
     };
 }
 
-function getAllChildren(root) {
-    if (!root) {
-      return [];
-    }
+var ignoreTags = [
+  "pre", "textarea", "p", "form", "input", "caption", "canvas", "svg"
+];
 
-    var ignoreTags = [
-      "pre", "textarea", "p", "form", "input", "table", "caption",
-      "canvas", "ion-content", "ion-app", "ion-nav", "svg"
-    ];
-    var ignoreClasses = ["nav-decor", "ion-page", "fixed-content"];
-    var list = [];
-
-    if (window.document.querySelectorAll) {
-      // Android: v4.3 and over
-      // iOS safari: v9.2 and over
-      var childNodes = root.querySelectorAll("*");
-      var allClickableElements = Array.prototype.slice.call(childNodes);
-      list = allClickableElements.filter(function(node) {
-        var tagName = node.tagName.toLowerCase();
-        if (node !== root &&
-          shouldWatchByNative(node) &&
-          ignoreTags.indexOf(tagName) == -1) {
-
-          var classNames = (node.className || "").split(" ");
-          var matches = classNames.filter(function(clsName) {
-            return ignoreClasses.indexOf(clsName) !== -1;
-          });
-          if (matches && matches.length > 0) {
-            return false;
-          }
-          return true;
-        } else {
-          return false;
-        }
-      });
-    } else {
-      var node, tagName, classNames, i, j, hit;
-      var clickableElements = root.getElementsByTagName("*");
-      for (i = 0; i < clickableElements.length; i++) {
-        node = clickableElements[i];
-        tagName = node.tagName.toLowerCase();
-        if (shouldWatchByNative(node) &&
-          ignoreTags.indexOf(tagName) == -1) {
-          classNames = (node.className || "").split(" ");
-          hit = false;
-          for (j = 0; j < classNames.length; j++) {
-            if (ignoreClasses.indexOf(classNames[j]) > -1) {
-              hit = true;
-              break;
-            }
-          }
-          if (!hit) {
-            list.push(node);
-          }
-        }
-      }
-    }
-
-    return list;
-}
 
 function shouldWatchByNative(node) {
-  if (node.nodeType !== Node.ELEMENT_NODE || !node.offsetParent) {
-    return;
+  if (!node || node.nodeType !== Node.ELEMENT_NODE || !node.parentNode || node instanceof SVGElement) {
+    if (node === document.body) {
+      return true;
+    }
+    return false;
   }
+
+  var tagName = node.tagName.toLowerCase();
+  if (ignoreTags.indexOf(tagName) > -1) {
+    return false;
+  }
+
+  var classNames = (node.className || "").split(" ");
+  if (classNames.indexOf("_gmaps_cdv_") > -1) {
+    return true;
+  }
+
   var visibilityCSS = getStyle(node, 'visibility');
   var displayCSS = getStyle(node, 'display');
-  var opacityCSS = getStyle(node, 'opacity');
-  opacityCSS = /^[\d.]+$/.test(opacityCSS + "") ? opacityCSS : 1;
-  var heightCSS = getStyle(node, 'height');
-  var widthCSS = getStyle(node, 'width');
-  var clickableSize = (heightCSS != "0px" && widthCSS != "0px" &&
-            (node.offsetHeight > 0 && node.offsetWidth > 0 || node.clientHeight > 0 && node.clientWidth > 0));
+
+  // Do not check this at here.
+  //var pointerEventsCSS = getStyle(node, 'pointer-events');
+
+  //-----------------------------------------
+  // no longer check the opacity property,
+  // because the app might start changing the opacity later.
+  //-----------------------------------------
+  //var opacityCSS = getStyle(node, 'opacity');
+  //opacityCSS = /^[\d.]+$/.test(opacityCSS + "") ? opacityCSS : 1;
+
+  //-----------------------------------------
+  // no longer check the clickable size,
+  // because HTML still can display larger element inside one small element.
+  //-----------------------------------------
+  // var clickableSize = (
+  //   node.offsetHeight > 0 && node.offsetWidth > 0 ||
+  //   node.clientHeight > 0 && node.clientWidth > 0);
   return displayCSS !== "none" &&
-    opacityCSS > 0 && visibilityCSS != "hidden" &&
-    clickableSize;
+    visibilityCSS !== "hidden";
 }
 
 
 // Get z-index order
 // http://stackoverflow.com/a/24136505
 var internalCache = {};
+function _clearInternalCache() {
+  internalCache = undefined;
+  internalCache = {};
+}
+function _removeCacheById(elemId) {
+  delete internalCache[elemId];
+}
 function getZIndex(dom) {
     if (dom === document.body) {
       internalCache = undefined;
       internalCache = {};
     }
-    var z = null;
     if (!dom) {
       return 0;
     }
 
+    var z = 0;
     if (window.getComputedStyle) {
-      try {
-        z = parseInt(document.defaultView.getComputedStyle(dom, null).getPropertyValue('z-index'), 10);
-      } catch(e) {}
+      z = document.defaultView.getComputedStyle(dom, null).getPropertyValue('z-index');
     }
     if (dom.currentStyle) {
-        z = parseInt(dom.currentStyle['z-index']);
+        z = dom.currentStyle['z-index'];
     }
-    if (dom === document.body && z === "auto") {
-      z = 0;
-    }
-    if (isNaN(z)) {
-        z = 0;
-    }
+    var elemId = dom.getAttribute("__pluginDomId");
     var parentNode = dom.parentNode;
+    var parentZIndex = 0;
     if (parentNode && parentNode.nodeType === Node.ELEMENT_NODE) {
       var parentElemId = parentNode.getAttribute("__pluginDomId");
-      if (!parentElemId) {
-          parentElemId = "pgm" + Math.floor(Math.random() * Date.now());
-          parentNode.setAttribute("__pluginDomId", parentElemId);
-      }
       if (parentElemId in internalCache) {
-        z += internalCache[parentElemId];
+        parentZIndex = internalCache[parentElemId];
       } else {
-        var parentZIndex = getZIndex(dom.parentNode);
+        parentZIndex = getZIndex(dom.parentNode);
         internalCache[parentElemId] = parentZIndex;
-        z += parentZIndex;
       }
     }
 
-    var elemId = dom.getAttribute("__pluginDomId");
-    if (!elemId) {
-        elemId = "pgm" + Math.floor(Math.random() * Date.now());
-        dom.setAttribute("__pluginDomId", elemId);
+    var isInherit = false;
+    if (z === "unset" || z === "initial") {
+      z = 0;
+    } else if (z === "auto" || z === "inherit") {
+      z = 0;
+      isInherit = true;
+    } else {
+      z = parseInt(z);
     }
-    internalCache[elemId] = z;
-
-    return z;
-}
-
-function getDomDepth(dom, idx) {
-    if (dom.nodeType !== Node.ELEMENT_NODE) {
-      return 0;
-    }
-    var orgDom = dom;
-    var zIndex = getZIndex(dom);
-    /*
-    var depth = 0;
-    while (dom.parentNode !== null && dom.parentNode != document) {
-        dom = dom.parentNode;
-        depth++;
-    }
-    */
-    var result = (zIndex + 1) * 1000 + idx;
-    orgDom.setAttribute("_depth", result); // for debugging
-    return result;
+    //dom.setAttribute("__ZIndex", z);
+    internalCache[elemId] = z + parentZIndex;
+    return {
+      isInherit: isInherit,
+      z: z
+    };
 }
 
 // Get CSS value of an element
@@ -538,7 +500,25 @@ function defaultTrueOption(value) {
 }
 
 function createMvcArray(array) {
+    if (!array) {
+      return new BaseArrayClass();
+    }
+    if (array.type === "BaseArrayClass") {
+      return array;
+    }
+
     var mvcArray;
+    if (array.type === "LatLngBounds") {
+      array = [
+          array.southwest,
+          {lat: array.northeast.lat, lng: array.southwest.lng},
+          array.northeast,
+          {lat: array.southwest.lat, lng: array.northeast.lng},
+          array.southwest
+        ];
+      array = array.map(getLatLng);
+    }
+
     if (array && typeof array.getArray === "function") {
         mvcArray = new BaseArrayClass(array.getArray());
         array.on('set_at', function(index) {
@@ -568,31 +548,180 @@ function getLatLng(target) {
   };
 }
 function convertToPositionArray(array) {
-    array = array || [];
+  array = array || [];
 
-    if (!utils.isArray(array)) {
-        if (array &&
-            array.type === "LatLngBounds") {
-            array = [array.southwest, array.northeast];
-        } else if (array && typeof array.getArray === "function") {
-            array = array.getArray();
-        } else {
-            array = [array];
-        }
+  if (!utils.isArray(array)) {
+    if (array.type === "LatLngBounds") {
+      array = [
+        array.southwest,
+        {lat: array.northeast.lat, lng: array.southwest.lng},
+        array.northeast,
+        {lat: array.southwest.lat, lng: array.northeast.lng},
+        array.southwest
+      ];
+    } else if (array && typeof array.getArray === "function") {
+      array = array.getArray();
+    } else {
+      array = [array];
     }
+  }
 
-    array = array.map(getLatLng);
+  array = array.map(getLatLng);
 
-    return array;
+  return array;
+}
+
+function markerOptionsFilter(markerOptions) {
+  markerOptions = markerOptions || {};
+
+  markerOptions.animation = markerOptions.animation || undefined;
+  markerOptions.position = markerOptions.position || {};
+  markerOptions.position.lat = markerOptions.position.lat || 0.0;
+  markerOptions.position.lng = markerOptions.position.lng || 0.0;
+  markerOptions.draggable = markerOptions.draggable === true;
+  markerOptions.icon = markerOptions.icon || undefined;
+  markerOptions.zIndex = markerOptions.zIndex || 0;
+  markerOptions.snippet = typeof(markerOptions.snippet) === "string" ? markerOptions.snippet : undefined;
+  markerOptions.title = typeof(markerOptions.title) === "string" ? markerOptions.title : undefined;
+  markerOptions.visible = defaultTrueOption(markerOptions.visible);
+  markerOptions.flat = markerOptions.flat === true;
+  markerOptions.rotation = markerOptions.rotation || 0;
+  markerOptions.opacity = markerOptions.opacity === 0 ? 0 : (parseFloat("" + markerOptions.opacity, 10) || 1);
+  markerOptions.disableAutoPan = markerOptions.disableAutoPan === true;
+  markerOptions.noCache = markerOptions.noCache === true; //experimental
+  if (typeof markerOptions.icon === "object") {
+    if ("anchor" in markerOptions.icon &&
+      !Array.isArray(markerOptions.icon.anchor) &&
+      "x" in markerOptions.icon.anchor &&
+      "y" in markerOptions.icon.anchor) {
+      markerOptions.icon.anchor = [markerOptions.icon.anchor.x, markerOptions.icon.anchor.y];
+    }
+  }
+
+  if ("infoWindowAnchor" in markerOptions &&
+    !Array.isArray(markerOptions.infoWindowAnchor) &&
+    "x" in markerOptions.infoWindowAnchor &&
+    "y" in markerOptions.infoWindowAnchor) {
+    markerOptions.infoWindowAnchor = [markerOptions.infoWindowAnchor.x, markerOptions.infoWindowAnchor.anchor.y];
+  }
+
+  if ("style" in markerOptions && !("styles" in markerOptions)) {
+    markerOptions.styles = markerOptions.style;
+    delete markerOptions.style;
+  }
+  if ("styles" in markerOptions) {
+      markerOptions.styles = typeof markerOptions.styles === "object" ? markerOptions.styles : {};
+
+      if ("color" in markerOptions.styles) {
+          markerOptions.styles.color = HTMLColor2RGBA(markerOptions.styles.color || "#000000");
+      }
+  }
+  if (markerOptions.icon && isHTMLColorString(markerOptions.icon)) {
+      markerOptions.icon = HTMLColor2RGBA(markerOptions.icon);
+  }
+  if (markerOptions.icon && markerOptions.icon.label &&
+    isHTMLColorString(markerOptions.icon.label.color)) {
+      markerOptions.icon.label.color = HTMLColor2RGBA(markerOptions.icon.label.color);
+  }
+  return markerOptions;
+}
+
+function quickfilter(domPositions, mapElemIDs) {
+  //console.log("before", JSON.parse(JSON.stringify(domPositions)));
+  var keys = Object.keys(domPositions);
+
+  var tree = {};
+  mapElemIDs.forEach(function(mapElemId) {
+    var size = domPositions[mapElemId].size;
+    var mapRect = {
+      left: size.left,
+      top: size.top,
+      right: size.left + size.width,
+      bottom: size.top + size.height
+    };
+
+    tree[mapElemId] = domPositions[mapElemId];
+
+    keys.forEach(function(elemId) {
+      if (domPositions[elemId].ignore) {
+        return;
+      }
+      var domSize = {
+        left: domPositions[elemId].size.left,
+        top: domPositions[elemId].size.top,
+        right: domPositions[elemId].size.left + domPositions[elemId].size.width,
+        bottom: domPositions[elemId].size.bottom + domPositions[elemId].size.height
+      };
+      if (
+          (domSize.left >= mapRect.left && domSize.left <= mapRect.right) ||
+          (domSize.right >= mapRect.left && domSize.right <= mapRect.right) ||
+          (domSize.top >= mapRect.top && domSize.top <= mapRect.bottom) ||
+          (domSize.bottom >= mapRect.top && domSize.bottom <= mapRect.bottom)
+        ) {
+        tree[elemId] = domPositions[elemId];
+      }
+    });
+  });
+
+  //console.log("after", JSON.parse(JSON.stringify(tree)));
+  return tree;
+}
+
+function getPluginDomId(element) {
+  // Generates a __pluginDomId
+  if (!element || !shouldWatchByNative(element)) {
+    return;
+  }
+  var elemId = element.getAttribute("__pluginDomId");
+  if (!elemId) {
+    if (element === document.body) {
+      elemId = "root";
+    } else {
+      elemId = "pgm" + Math.floor(Math.random() * Date.now());
+    }
+    element.setAttribute("__pluginDomId", elemId);
+  }
+  return elemId;
+}
+
+// Add hashCode() method
+// https://stackoverflow.com/a/7616484/697856
+function hashCode(text) {
+  var hash = 0, i, chr;
+  if (text.length === 0) return hash;
+  for (i = 0; i < text.length; i++) {
+    chr   = text.charCodeAt(i);
+    hash  = ((hash << 5) - hash) + chr;
+    hash |= 0; // Convert to 32bit integer
+  }
+  return hash;
+}
+
+function createEvent(eventName, properties) {
+  var evt;
+  if (typeof CustomEvent === 'function') {
+    evt = new CustomEvent(eventName, {
+      bubbles: true,
+      detail: properties || null
+    });
+  } else {
+    evt = document.createEvent('Event');
+    evt.initEvent(eventName, true, false);
+    Object.keys(properties).forEach(function(key) {
+      if (!(key in properties)) {
+        evt[key] = properties[key];
+      }
+    });
+  }
+  return evt;
 }
 
 module.exports = {
+    _clearInternalCache: _clearInternalCache,
+    _removeCacheById: _removeCacheById,
     getZIndex: getZIndex,
-    getDomDepth: getDomDepth,
-    deleteFromObject: deleteFromObject,
     getDivRect: getDivRect,
     getDomInfo: getDomInfo,
-    getAllChildren: getAllChildren,
     isDom: isDom,
     parseBoolean: parseBoolean,
     HLStoRGB: HLStoRGB,
@@ -603,5 +732,15 @@ module.exports = {
     getStyle: getStyle,
     convertToPositionArray: convertToPositionArray,
     getLatLng: getLatLng,
-    shouldWatchByNative: shouldWatchByNative
+    shouldWatchByNative: shouldWatchByNative,
+    markerOptionsFilter: markerOptionsFilter,
+    quickfilter: quickfilter,
+    nextTick: nextTick,
+    getPluginDomId: getPluginDomId,
+    hashCode: hashCode,
+    createEvent: createEvent
 };
+
+if (cordova && cordova.platformId === "browser") {
+  require('cordova/exec/proxy').add('common', module.exports);
+}

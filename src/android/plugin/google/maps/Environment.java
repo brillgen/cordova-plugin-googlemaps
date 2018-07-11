@@ -1,6 +1,5 @@
 package plugin.google.maps;
 
-import android.annotation.SuppressLint;
 import android.content.Intent;
 import android.graphics.Color;
 import android.net.Uri;
@@ -9,7 +8,6 @@ import android.util.Log;
 
 import com.google.android.gms.common.ConnectionResult;
 import com.google.android.gms.common.GoogleApiAvailability;
-import com.google.android.gms.common.GooglePlayServicesUtil;
 
 import org.apache.cordova.CallbackContext;
 import org.apache.cordova.CordovaInterface;
@@ -21,7 +19,6 @@ import org.json.JSONArray;
 import org.json.JSONException;
 
 import java.lang.reflect.Method;
-import java.sql.Time;
 
 public class Environment extends CordovaPlugin {
   public PluginManager pluginManager;
@@ -67,9 +64,11 @@ public class Environment extends CordovaPlugin {
       try {
         cordova.getActivity().startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=com.google.android.gms")));
       } catch (android.content.ActivityNotFoundException anfe) {
-        cordova.getActivity().startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse("http://play.google.com/store/apps/details?id=appPackageName")));
+        cordova.getActivity().startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse("http://play.google.com/store/apps/details?id=com.google.android.gms")));
       }
 
+      // End the app (in order to prevent lots of crashes)
+      cordova.getActivity().finish();
 
       return;
     }
@@ -114,48 +113,15 @@ public class Environment extends CordovaPlugin {
     handler.postDelayed(new Runnable() {
       public void run() {
         googleMaps.mPluginLayout.setBackgroundColor(finalBackgroundColor);
-        sendNoResult(callbackContext);
+        callbackContext.success();
       }
     }, googleMaps.initialized ? 0 : 250);
   }
 
   @SuppressWarnings("unused")
   public Boolean getLicenseInfo(JSONArray args, final CallbackContext callbackContext) {
-    String msg = GoogleApiAvailability.getInstance().getOpenSourceSoftwareLicenseInfo(cordova.getActivity());
-    callbackContext.success(msg);
+    callbackContext.success("Google Maps Android API v2 does not need this method anymore. But for iOS, you still need to display the lincense.");
     return true;
-  }
-
-
-  /**
-   * Set the debug flag of myPluginLayer
-   * @param args Parameters given from JavaScript side
-   * @param callbackContext Callback context for sending back the result.
-   * @throws JSONException
-   */
-  @SuppressWarnings("unused")
-  public void setDebuggable(final JSONArray args, final CallbackContext callbackContext) throws JSONException {
-
-    cordova.getThreadPool().submit(new Runnable() {
-      @Override
-      public void run() {
-        try {
-          boolean debuggable = args.getBoolean(0);
-          CordovaGoogleMaps googleMaps = (CordovaGoogleMaps) pluginManager.getPlugin("CordovaGoogleMaps");
-          googleMaps.mPluginLayout.isDebug = debuggable;
-        } catch (JSONException e) {
-          e.printStackTrace();
-        } finally {
-          callbackContext.success();
-        }
-      }
-    });
-  }
-
-  protected void sendNoResult(CallbackContext callbackContext) {
-    PluginResult pluginResult = new PluginResult(PluginResult.Status.NO_RESULT);
-    pluginResult.setKeepCallback(true);
-    callbackContext.sendPluginResult(pluginResult);
   }
 
 }

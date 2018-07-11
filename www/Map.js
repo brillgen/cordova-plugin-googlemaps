@@ -1,181 +1,104 @@
-var argscheck = require('cordova/argscheck'),
-    utils = require('cordova/utils'),
-    exec = require('cordova/exec'),
-    common = require('./Common'),
-    BaseClass = require('./BaseClass'),
-    LatLng = require('./LatLng'),
-    LatLngBounds = require('./LatLngBounds'),
-    MapTypeId = require('./MapTypeId'),
-    event = require('./event');
-
-var Marker = require('./Marker');
-var Circle = require('./Circle');
-var Polyline = require('./Polyline');
-var Polygon = require('./Polygon');
-var TileOverlay = require('./TileOverlay');
-var GroundOverlay = require('./GroundOverlay');
-var KmlOverlay = require('./KmlOverlay');
-var CameraPosition = require('./CameraPosition');
-
+var utils = require('cordova/utils'),
+  cordova_exec = require('cordova/exec'),
+  common = require('./Common'),
+  Overlay = require('./Overlay'),
+  BaseClass = require('./BaseClass'),
+  BaseArrayClass = require('./BaseArrayClass'),
+  LatLng = require('./LatLng'),
+  LatLngBounds = require('./LatLngBounds'),
+  MapTypeId = require('./MapTypeId'),
+  event = require('./event'),
+  VisibleRegion = require('./VisibleRegion'),
+  Marker = require('./Marker'),
+  Circle = require('./Circle'),
+  Polyline = require('./Polyline'),
+  Polygon = require('./Polygon'),
+  TileOverlay = require('./TileOverlay'),
+  GroundOverlay = require('./GroundOverlay'),
+  KmlOverlay = require('./KmlOverlay'),
+  KmlLoader = require('./KmlLoader'),
+  CameraPosition = require('./CameraPosition'),
+  MarkerCluster = require('./MarkerCluster');
 
 /**
  * Google Maps model.
  */
-var Map = function(id) {
-    var self = this;
-    BaseClass.apply(self);
+var exec;
+var Map = function(id, _exec) {
+  var self = this;
+  exec = _exec;
+  Overlay.call(self, self, {}, 'Map', _exec, {
+    id: id
+  });
+  delete self.map;
 
-    self.MARKERS = {};
-    self.KML_LAYERS = {};
-    self.OVERLAYS = {};
 
-    Object.defineProperty(self, "type", {
-        value: "Map",
-        writable: false
-    });
+  self.set("myLocation", false);
+  self.set("myLocationButton", false);
 
-    Object.defineProperty(self, "id", {
-        value: id,
-        writable: false
-    });
+  self.MARKERS = {};
+  self.OVERLAYS = {};
 
-    self.on("active_marker_id_changed", function(prevId, newId) {
-        if (prevId in self.MARKERS) {
-            if (self.MARKERS[prevId].isInfoWindowShown()) {
-                self.MARKERS[prevId].trigger.call(self.MARKERS[prevId], event.INFO_CLOSE);
-            }
-        }
-        exec(null, null, self.id + "-marker", 'setActiveMarkerId', [newId]);
-    });
+  var infoWindowLayer = document.createElement("div");
+  infoWindowLayer.style.position = "absolute";
+  infoWindowLayer.style.left = 0;
+  infoWindowLayer.style.top = 0;
+  infoWindowLayer.style.width = 0;
+  infoWindowLayer.style.height = 0;
+  infoWindowLayer.style.overflow = "visible";
+  infoWindowLayer.style["z-index"] = 0;
+
+  Object.defineProperty(self, "_layers", {
+    value: {
+      info: infoWindowLayer
+    },
+    enumerable: false,
+    writable: false
+  });
+
+  self.on(event.MAP_CLICK, function() {
+    self.set("active_marker", undefined);
+  });
+
+  self.on("active_marker_changed", function(prevMarker, newMarker) {
+    var newMarkerId = newMarker ? newMarker.getId() : null;
+    if (prevMarker) {
+      prevMarker.hideInfoWindow.call(prevMarker);
+    }
+    self.exec.call(self, null, null, self.id, 'setActiveMarkerId', [newMarkerId]);
+  });
 };
 
-utils.extend(Map, BaseClass);
-
-Map.prototype.getId = function() {
-    return this.id;
-};
+utils.extend(Map, Overlay);
 
 /**
  * @desc Recalculate the position of HTML elements
  */
 Map.prototype.refreshLayout = function(event) {
-    exec(null, null, this.id, 'resizeMap', []);
+  this.exec.call(this, null, null, this.id, 'resizeMap', []);
 };
 
-Map.prototype.getMap = function(mapId, div, options) {
-    var self = this,
-        args = [mapId];
+Map.prototype.getMap = function(meta, div, options) {
+  var self = this,
+    args = [meta];
+  options = options || {};
 
-    if (!common.isDom(div)) {
-        self.set("visible", false);
-        options = div;
-        options = options || {};
-        if (options.camera) {
-          if (options.camera.latLng) {
-              options.camera.target = options.camera.latLng;
-              delete options.camera.latLng;
-          }
-          this.set('camera', options.camera);
-          if (options.camera.target) {
-            this.set('camera_target', options.camera.target);
-          }
-          if (options.camera.bearing) {
-            this.set('camera_bearing', options.camera.bearing);
-          }
-          if (options.camera.zoom) {
-            this.set('camera_zoom', options.camera.zoom);
-          }
-          if (options.camera.tilt) {
-            this.set('camera_tilt', options.camera.tilt);
-          }
-        }
-        args.push(options);
-    } else {
+  self.set("clickable", options.clickable === false ? false : true);
+  self.set("visible", options.visible === false ? false : true);
 
-        var currentDiv = self.get("div");
-        self.set("visible", true);
-        options = options || {};
-        if (options.camera) {
-          if (options.camera.latLng) {
-              options.camera.target = options.camera.latLng;
-              delete options.camera.latLng;
-          }
-          this.set('camera', options.camera);
-          if (options.camera.target) {
-            this.set('camera_target', options.camera.target);
-          }
-          if (options.camera.bearing) {
-            this.set('camera_bearing', options.camera.bearing);
-          }
-          if (options.camera.zoom) {
-            this.set('camera_zoom', options.camera.zoom);
-          }
-          if (options.camera.tilt) {
-            this.set('camera_tilt', options.camera.tilt);
-          }
-        }
-        if (options.styles) {
-          options.styles = JSON.stringify(options.styles);
-        }
-        args.push(options);
+  if (options.controls) {
+    this.set("myLocation", options.controls.myLocation === true);
+    this.set("myLocationButton", options.controls.myLocationButton === true);
+  }
 
-        div.style.overflow = "hidden";
-        self.set("div", div);
-
-        if (div.offsetWidth < 100 || div.offsetHeight < 100) {
-          // If the map Div is too small, wait a little.
-          var callee = arguments.callee;
-          setTimeout(function() {
-            callee.call(self, mapId, div, options);
-          }, 250 + Math.random() * 100);
-          return;
-        }
-        var elements = [];
-        var elemId, clickable, size;
-
-
-        // Gets the map div size.
-        // The plugin needs to consider the viewport zoom ratio
-        // for the case window.innerHTML > body.offsetWidth.
-        elemId = div.getAttribute("__pluginDomId");
-        if (!elemId) {
-            elemId = "pgm" + Math.floor(Math.random() * Date.now());
-            div.setAttribute("__pluginDomId", elemId);
-        }
-        args.push(elemId);
-
-        while (div.parentNode) {
-            div.style.backgroundColor = 'rgba(0,0,0,0)';
-
-            // prevent multiple readding the class
-            if (div.classList && !div.classList.contains('_gmaps_cdv_')) {
-                div.classList.add('_gmaps_cdv_');
-            } else if (div.className && div.className.indexOf('_gmaps_cdv_') === -1) {
-                div.className = div.className + ' _gmaps_cdv_';
-            }
-
-            div = div.parentNode;
-        }
-    }
-
-    cordova.fireDocumentEvent('plugin_touch', {});
-
-    exec(function() {
-      // Prevent too much faster
-      setTimeout(function() {
-          self.refreshLayout();
-          self.trigger(event.MAP_READY, self);
-      }, 100);
-    }, self.errorHandler, 'CordovaGoogleMaps', 'getMap', args);
-};
-
-Map.prototype.setOptions = function(options) {
+  if (!common.isDom(div)) {
+    self.set("visible", false);
+    options = div;
     options = options || {};
-
     if (options.camera) {
       if (options.camera.latLng) {
-          options.camera.target = options.camera.latLng;
-          delete options.camera.latLng;
+        options.camera.target = options.camera.latLng;
+        delete options.camera.latLng;
       }
       this.set('camera', options.camera);
       if (options.camera.target) {
@@ -191,29 +114,200 @@ Map.prototype.setOptions = function(options) {
         this.set('camera_tilt', options.camera.tilt);
       }
     }
-    if (options.styles) {
+    args.push(options);
+  } else {
+
+    var positionCSS = common.getStyle(div, "position");
+    if (!positionCSS || positionCSS === "static") {
+      // important for HtmlInfoWindow
+      div.style.position = "relative";
+    }
+    options = options || {};
+    if (options.camera) {
+      if (options.camera.latLng) {
+        options.camera.target = options.camera.latLng;
+        delete options.camera.latLng;
+      }
+      this.set('camera', options.camera);
+      if (options.camera.target) {
+        this.set('camera_target', options.camera.target);
+      }
+      if (options.camera.bearing) {
+        this.set('camera_bearing', options.camera.bearing);
+      }
+      if (options.camera.zoom) {
+        this.set('camera_zoom', options.camera.zoom);
+      }
+      if (options.camera.tilt) {
+        this.set('camera_tilt', options.camera.tilt);
+      }
+    }
+    if (utils.isArray(options.styles)) {
       options.styles = JSON.stringify(options.styles);
     }
-    exec(null, this.errorHandler, this.id, 'setOptions', [options]);
-    return this;
+    args.push(options);
+
+    div.style.overflow = "hidden";
+    self.set("div", div);
+
+    if (div.offsetWidth < 100 || div.offsetHeight < 100) {
+      // If the map Div is too small, wait a little.
+      var callee = arguments.callee;
+      setTimeout(function() {
+        callee.call(self, meta, div, options);
+      }, 250 + Math.random() * 100);
+      return;
+    }
+    var elements = [];
+    var elemId, clickable, size;
+
+
+    // Gets the map div size.
+    // The plugin needs to consider the viewport zoom ratio
+    // for the case window.innerHTML > body.offsetWidth.
+    elemId = common.getPluginDomId(div);
+    args.push(elemId);
+
+  }
+
+  exec.call({
+    _isReady: true
+  }, function() {
+
+    //------------------------------------------------------------------------
+    // Clear background colors of map div parents after the map is created
+    //------------------------------------------------------------------------
+    var div = self.get("div");
+    if (common.isDom(div)) {
+
+      // Insert the infoWindow layer
+      if (self._layers.info.parentNode) {
+        try {
+          self._layers.info.parentNode.removeChild(self._layers.info.parentNode);
+        } catch (e) {
+          // ignore
+        }
+      }
+      var positionCSS;
+      for (var i = 0; i < div.children.length; i++) {
+        positionCSS = common.getStyle(div.children[i], "position");
+        if (positionCSS === "static") {
+          div.children[i].style.position = "relative";
+        }
+      }
+      div.insertBefore(self._layers.info, div.firstChild);
+
+
+      while (div.parentNode) {
+        div.style.backgroundColor = 'rgba(0,0,0,0) !important';
+
+        // prevent multiple readding the class
+        if (div.classList && !div.classList.contains('_gmaps_cdv_')) {
+          div.classList.add('_gmaps_cdv_');
+        } else if (div.className && div.className.indexOf('_gmaps_cdv_') === -1) {
+          div.className = div.className + ' _gmaps_cdv_';
+        }
+
+        div = div.parentNode;
+      }
+    }
+    cordova.fireDocumentEvent("plugin_touch", {
+      force: true
+    });
+
+    //------------------------------------------------------------------------
+    // In order to work map.getVisibleRegion() correctly, wait a little.
+    //------------------------------------------------------------------------
+    var waitCnt = 0;
+    var waitCameraSync = function() {
+      if (!self.getVisibleRegion() && (waitCnt++ < 10)) {
+        setTimeout(function() {
+          common.nextTick(waitCameraSync);
+        }, 100);
+        return;
+      }
+
+
+      self._privateInitialize();
+      delete self._privateInitialize;
+      self.refreshLayout();
+      self.trigger(event.MAP_READY, self);
+    };
+    setTimeout(function() {
+      common.nextTick(waitCameraSync);
+    }, 100);
+  }, self.errorHandler, 'CordovaGoogleMaps', 'getMap', args, {
+    sync: true
+  });
+};
+
+Map.prototype.setOptions = function(options) {
+  options = options || {};
+
+  if (options.controls) {
+    var myLocation = this.get("myLocation");
+    if ("myLocation" in options.controls) {
+      myLocation = options.controls.myLocation === true;
+    }
+    var myLocationButton = this.get("myLocationButton");
+    if ("myLocationButton" in options.controls) {
+      myLocationButton = options.controls.myLocationButton === true;
+    }
+    this.set("myLocation", myLocation);
+    this.set("myLocationButton", myLocationButton);
+    options.controls.myLocation = myLocation;
+    options.controls.myLocationButton = myLocationButton;
+  }
+  if (options.camera) {
+    if (options.camera.latLng) {
+      options.camera.target = options.camera.latLng;
+      delete options.camera.latLng;
+    }
+    this.set('camera', options.camera);
+    if (options.camera.target) {
+      this.set('camera_target', options.camera.target);
+    }
+    if (options.camera.bearing) {
+      this.set('camera_bearing', options.camera.bearing);
+    }
+    if (options.camera.zoom) {
+      this.set('camera_zoom', options.camera.zoom);
+    }
+    if (options.camera.tilt) {
+      this.set('camera_tilt', options.camera.tilt);
+    }
+  }
+  if (utils.isArray(options.styles)) {
+    options.styles = JSON.stringify(options.styles);
+  }
+  this.exec.call(this, null, this.errorHandler, this.id, 'setOptions', [options]);
+  return this;
+};
+
+Map.prototype.getMyLocation = function(params, success_callback, error_callback) {
+  return plugin.google.maps.LocationService.getMyLocation.call(this, params, success_callback, error_callback);
 };
 
 Map.prototype.setCameraTarget = function(latLng) {
-    this.set('camera_target', latLng);
-    exec(null, this.errorHandler, this.id, 'setCameraTarget', [latLng.lat, latLng.lng]);
-    return this;
+  this.set('camera_target', latLng);
+  this.exec.call(this, null, this.errorHandler, this.id, 'setCameraTarget', [latLng.lat, latLng.lng]);
+  return this;
 };
 
 Map.prototype.setCameraZoom = function(zoom) {
-    this.set('camera_zoom', zoom);
-    exec(null, this.errorHandler, this.id, 'setCameraZoom', [zoom]);
-    return this;
+  this.set('camera_zoom', zoom);
+  this.exec.call(this, null, this.errorHandler, this.id, 'setCameraZoom', [zoom], {
+    sync: true
+  });
+  return this;
 };
 Map.prototype.panBy = function(x, y) {
-    x = parseInt(x, 10);
-    y = parseInt(y, 10);
-    exec(null, this.errorHandler, this.id, 'panBy', [x, y]);
-    return this;
+  x = parseInt(x, 10);
+  y = parseInt(y, 10);
+  this.exec.call(this, null, this.errorHandler, this.id, 'panBy', [x, y], {
+    sync: true
+  });
+  return this;
 };
 
 /**
@@ -221,34 +315,54 @@ Map.prototype.panBy = function(x, y) {
  * including markers, polylines and ground overlays.
  */
 Map.prototype.clear = function(callback) {
-    var self = this;
+  var self = this;
+  if (self._isRemoved) {
+    // Simply ignore because this map is already removed.
+    return Promise.resolve();
+  }
 
-    // Close the active infoWindow
-    var active_marker_id = self.get("active_marker_id");
-    if (active_marker_id && active_marker_id in self.MARKERS) {
-      self.MARKERS[active_marker_id].trigger(event.INFO_CLOSE);
+  // Close the active infoWindow
+  var active_marker = self.get("active_marker");
+  if (active_marker) {
+    active_marker.trigger(event.INFO_CLOSE);
+  }
+
+  var clearObj = function(obj) {
+    var ids = Object.keys(obj);
+    var id, instance;
+    for (var i = 0; i < ids.length; i++) {
+      id = ids[i];
+      instance = obj[id];
+      if (instance) {
+        if (typeof instance.remove === "function") {
+          instance.remove();
+        }
+        instance.off();
+        delete obj[id];
+      }
     }
+    obj = {};
+  };
 
-    var clearObj = function(obj) {
-        var ids = Object.keys(obj);
-        var id;
-        for (var i = 0; i < ids.length; i++) {
-            id = ids[i];
-            obj[id].off();
-            delete obj[id];
-        }
-        obj = {};
-    };
+  clearObj(self.OVERLAYS);
+  clearObj(self.MARKERS);
+  self.trigger("map_clear");
 
-    clearObj(self.OVERLAYS);
-    clearObj(self.MARKERS);
-    clearObj(self.KML_LAYERS);
+  var resolver = function(resolve, reject) {
+    self.exec.call(self,
+      resolve.bind(self),
+      reject.bind(self),
+      self.id, 'clear', [], {
+        sync: true
+      });
+  };
 
-    exec(function() {
-        if (typeof callback === "function") {
-            callback.call(self);
-        }
-    }, self.errorHandler, this.id, 'clear', []);
+  if (typeof callback === "function") {
+    resolver(callback, self.errorHandler);
+  } else {
+    return new Promise(resolver);
+  }
+
 };
 
 /**
@@ -261,12 +375,12 @@ Map.prototype.clear = function(callback) {
  *                               MAP_TYPE_NONE
  */
 Map.prototype.setMapTypeId = function(mapTypeId) {
-    if (mapTypeId !== MapTypeId[mapTypeId.replace("MAP_TYPE_", '')]) {
-        return this.errorHandler("Invalid MapTypeId was specified.");
-    }
-    this.set('mapTypeId', mapTypeId);
-    exec(null, this.errorHandler, this.id, 'setMapTypeId', [mapTypeId]);
-    return this;
+  if (mapTypeId !== MapTypeId[mapTypeId.replace("MAP_TYPE_", '')]) {
+    return this.errorHandler("Invalid MapTypeId was specified.");
+  }
+  this.set('mapTypeId', mapTypeId);
+  this.exec.call(this, null, this.errorHandler, this.id, 'setMapTypeId', [mapTypeId]);
+  return this;
 };
 
 /**
@@ -274,9 +388,11 @@ Map.prototype.setMapTypeId = function(mapTypeId) {
  * @param {Number} tilt  The angle
  */
 Map.prototype.setCameraTilt = function(tilt) {
-    this.set('camera_tilt', tilt);
-    exec(null, this.errorHandler, this.id, 'setCameraTilt', [tilt]);
-    return this;
+  this.set('camera_tilt', tilt);
+  this.exec.call(this, null, this.errorHandler, this.id, 'setCameraTilt', [tilt], {
+    sync: true
+  });
+  return this;
 };
 
 /**
@@ -284,64 +400,45 @@ Map.prototype.setCameraTilt = function(tilt) {
  * @param {Number} bearing  The bearing
  */
 Map.prototype.setCameraBearing = function(bearing) {
-    this.set('camera_bearing', bearing);
-    exec(null, this.errorHandler, this.id, 'setCameraBearing', [bearing]);
-    return this;
+  this.set('camera_bearing', bearing);
+  this.exec.call(this, null, this.errorHandler, this.id, 'setCameraBearing', [bearing], {
+    sync: true
+  });
+  return this;
 };
 
 Map.prototype.moveCameraZoomIn = function(callback) {
-    var self = this;
-    var cameraPosition = self.get("camera");
-    cameraPosition.zoom++;
-    cameraPosition.zoom = cameraPosition.zoom < 0 ? 0 : cameraPosition.zoom;
+  var self = this;
+  var cameraPosition = self.get("camera");
+  cameraPosition.zoom++;
+  cameraPosition.zoom = cameraPosition.zoom < 0 ? 0 : cameraPosition.zoom;
 
-    exec(function() {
-        if (typeof callback === "function") {
-            callback.call(self);
-        }
-    }, self.errorHandler, self.id, 'moveCamera', [cameraPosition]);
+  return self.moveCamera(cameraPosition, callback);
 
 };
 Map.prototype.moveCameraZoomOut = function(callback) {
-    var self = this;
-    var cameraPosition = self.get("camera");
-    cameraPosition.zoom--;
-    cameraPosition.zoom = cameraPosition.zoom < 0 ? 0 : cameraPosition.zoom;
+  var self = this;
+  var cameraPosition = self.get("camera");
+  cameraPosition.zoom--;
+  cameraPosition.zoom = cameraPosition.zoom < 0 ? 0 : cameraPosition.zoom;
 
-    exec(function() {
-        if (typeof callback === "function") {
-            callback.call(self);
-        }
-    }, self.errorHandler, self.id, 'moveCamera', [cameraPosition]);
-
+  return self.moveCamera(cameraPosition, callback);
 };
 Map.prototype.animateCameraZoomIn = function(callback) {
-    var self = this;
-    var cameraPosition = self.get("camera");
-    cameraPosition.zoom++;
-    cameraPosition.zoom = cameraPosition.zoom < 0 ? 0 : cameraPosition.zoom;
-    cameraPosition.duration = 500;
-
-    exec(function() {
-        if (typeof callback === "function") {
-            callback.call(self);
-        }
-    }, self.errorHandler, self.id, 'animateCamera', [cameraPosition]);
-
+  var self = this;
+  var cameraPosition = self.get("camera");
+  cameraPosition.zoom++;
+  cameraPosition.zoom = cameraPosition.zoom < 0 ? 0 : cameraPosition.zoom;
+  cameraPosition.duration = 500;
+  return self.animateCamera(cameraPosition, callback);
 };
 Map.prototype.animateCameraZoomOut = function(callback) {
-    var self = this;
-    var cameraPosition = self.get("camera");
-    cameraPosition.zoom--;
-    cameraPosition.zoom = cameraPosition.zoom < 0 ? 0 : cameraPosition.zoom;
-    cameraPosition.duration = 500;
-
-    exec(function() {
-        if (typeof callback === "function") {
-            callback.call(self);
-        }
-    }, self.errorHandler, self.id, 'animateCamera', [cameraPosition]);
-
+  var self = this;
+  var cameraPosition = self.get("camera");
+  cameraPosition.zoom--;
+  cameraPosition.zoom = cameraPosition.zoom < 0 ? 0 : cameraPosition.zoom;
+  cameraPosition.duration = 500;
+  return self.animateCamera(cameraPosition, callback);
 };
 /**
  * @desc   Move the map camera with animation
@@ -349,26 +446,48 @@ Map.prototype.animateCameraZoomOut = function(callback) {
  * @params {Function} [callback] This callback is involved when the animation is completed.
  */
 Map.prototype.animateCamera = function(cameraPosition, callback) {
-    var self = this;
-    var target = cameraPosition.target;
-    if (!target && "position" in cameraPosition) {
-      target = cameraPosition.position;
-    }
-    if (!target) {
-      return;
-    }
+  var self = this;
 
-    if (utils.isArray(target) || target.type === "LatLngBounds") {
-      target = common.convertToPositionArray(target);
+  var target = cameraPosition.target;
+  if (!target && "position" in cameraPosition) {
+    target = cameraPosition.position;
+  }
+  if (!target) {
+    return Promise.reject("No target field is specified.");
+  }
+  if (!("padding" in cameraPosition)) {
+    cameraPosition.padding = 20;
+  }
+
+  if (utils.isArray(target) || target.type === "LatLngBounds") {
+    target = common.convertToPositionArray(target);
+    if (target.length === 0) {
+      // skip if no point is specified
+      if (typeof callback === "function") {
+        callback.call(self);
+        return;
+      } else {
+        return Promise.reject("No point is specified.");
+      }
     }
-    cameraPosition.target = target;
+  }
+  cameraPosition.target = target;
 
-    exec(function() {
-        if (typeof callback === "function") {
-            callback.call(self);
-        }
-    }, self.errorHandler, self.id, 'animateCamera', [cameraPosition]);
+  var resolver = function(resolve, reject) {
 
+    self.exec.call(self,
+      resolve.bind(self),
+      reject.bind(self),
+      self.id, 'animateCamera', [cameraPosition], {
+        sync: true
+      });
+  };
+
+  if (typeof callback === "function") {
+    resolver(callback, self.errorHandler);
+  } else {
+    return new Promise(resolver);
+  }
 };
 /**
  * @desc   Move the map camera without animation
@@ -376,89 +495,128 @@ Map.prototype.animateCamera = function(cameraPosition, callback) {
  * @params {Function} [callback] This callback is involved when the animation is completed.
  */
 Map.prototype.moveCamera = function(cameraPosition, callback) {
-    var self = this;
-    var target = cameraPosition.target;
-    if (!target && "position" in cameraPosition) {
-      target = cameraPosition.position;
-    }
-    if (!target) {
-      return;
-    }
+  var self = this;
+  var target = cameraPosition.target;
+  if (!target && "position" in cameraPosition) {
+    target = cameraPosition.position;
+  }
+  if (!target) {
+    return Promise.reject("No target field is specified.");
+  }
 
-    if (utils.isArray(target) || target.type === "LatLngBounds") {
-      target = common.convertToPositionArray(target);
+  if (!("padding" in cameraPosition)) {
+    cameraPosition.padding = 20;
+  }
+  if (utils.isArray(target) || target.type === "LatLngBounds") {
+    target = common.convertToPositionArray(target);
+    if (target.length === 0) {
+      // skip if no point is specified
+      if (typeof callback === "function") {
+        callback.call(self);
+        return;
+      } else {
+        return Promise.reject("No point is specified.");
+      }
     }
-    cameraPosition.target = target;
-    exec(function() {
-        if (typeof callback === "function") {
-            callback.call(self);
-        }
-    }, self.errorHandler, self.id, 'moveCamera', [cameraPosition]);
+  }
+  cameraPosition.target = target;
 
+  var resolver = function(resolve, reject) {
+
+    self.exec.call(self,
+      resolve.bind(self),
+      reject.bind(self),
+      self.id, 'moveCamera', [cameraPosition], {
+        sync: true
+      });
+  };
+
+  if (typeof callback === "function") {
+    resolver(callback, self.errorHandler);
+  } else {
+    return new Promise(resolver);
+  }
+};
+
+Map.prototype.setMyLocationButtonEnabled = function(enabled) {
+  var self = this;
+  enabled = common.parseBoolean(enabled);
+  this.set("myLocationButton", enabled);
+  self.exec.call(self, null, this.errorHandler, this.id, 'setMyLocationEnabled', [{
+    myLocationButton: enabled,
+    myLocation: self.get("myLocation") === true
+  }], {
+    sync: true
+  });
+  return this;
 };
 
 Map.prototype.setMyLocationEnabled = function(enabled) {
-    enabled = common.parseBoolean(enabled);
-    exec(null, this.errorHandler, this.id, 'setMyLocationEnabled', [enabled]);
-    return this;
+  var self = this;
+  enabled = common.parseBoolean(enabled);
+  this.set("myLocation", enabled);
+  self.exec.call(self, null, this.errorHandler, this.id, 'setMyLocationEnabled', [{
+    myLocationButton: self.get("myLocationButton") === true,
+    myLocation: enabled
+  }], {
+    sync: true
+  });
+  return this;
 };
+
 Map.prototype.setIndoorEnabled = function(enabled) {
-    enabled = common.parseBoolean(enabled);
-    exec(null, this.errorHandler, this.id, 'setIndoorEnabled', [enabled]);
-    return this;
+  enabled = common.parseBoolean(enabled);
+  this.exec.call(this, null, this.errorHandler, this.id, 'setIndoorEnabled', [enabled]);
+  return this;
 };
 Map.prototype.setTrafficEnabled = function(enabled) {
-    enabled = common.parseBoolean(enabled);
-    exec(null, this.errorHandler, this.id, 'setTrafficEnabled', [enabled]);
-    return this;
+  enabled = common.parseBoolean(enabled);
+  this.exec.call(this, null, this.errorHandler, this.id, 'setTrafficEnabled', [enabled]);
+  return this;
 };
 Map.prototype.setCompassEnabled = function(enabled) {
-    var self = this;
-    enabled = common.parseBoolean(enabled);
-    exec(null, self.errorHandler, this.id, 'setCompassEnabled', [enabled]);
-    return this;
-};
-Map.prototype.getMyLocation = function(params, success_callback, error_callback) {
-    var args = [params || {}, success_callback || null, error_callback];
-    if (typeof args[0] === "function") {
-        args.unshift({});
-    }
-    params = args[0];
-    success_callback = args[1];
-    error_callback = args[2];
-
-    params.enableHighAccuracy = params.enableHighAccuracy === true;
-    var self = this;
-    var successHandler = function(location) {
-        if (typeof success_callback === "function") {
-            location.latLng = new LatLng(location.latLng.lat, location.latLng.lng);
-            success_callback.call(self, location);
-        }
-    };
-    var errorHandler = function(result) {
-        if (typeof error_callback === "function") {
-            error_callback.call(self, result);
-        }
-    };
-    exec(successHandler, errorHandler, 'CordovaGoogleMaps', 'getMyLocation', [params]);
+  var self = this;
+  enabled = common.parseBoolean(enabled);
+  self.exec.call(self, null, self.errorHandler, this.id, 'setCompassEnabled', [enabled]);
+  return this;
 };
 Map.prototype.getFocusedBuilding = function(callback) {
-    exec(callback, this.errorHandler, this.id, 'getFocusedBuilding', []);
+  var self = this;
+  var resolver = function(resolve, reject) {
+    self.exec.call(self,
+      resolve.bind(self),
+      reject.bind(self),
+      self.id, 'getFocusedBuilding', []);
+  };
+
+  if (typeof callback === "function") {
+    resolver(callback, self.errorHandler);
+  } else {
+    return new Promise(resolver);
+  }
 };
 Map.prototype.getVisible = function() {
-    return this.get("visible");
+  return this.get("visible");
 };
 Map.prototype.setVisible = function(isVisible) {
-    var self = this;
-    isVisible = common.parseBoolean(isVisible);
-    self.set("visible", isVisible);
-    exec(null, self.errorHandler, this.id, 'setVisible', [isVisible]);
-    return this;
+  cordova.fireDocumentEvent('plugin_touch');
+  var self = this;
+  isVisible = common.parseBoolean(isVisible);
+  self.set("visible", isVisible);
+  self.exec.call(self, null, self.errorHandler, this.id, 'setVisible', [isVisible]);
+  return this;
 };
+
 Map.prototype.setClickable = function(isClickable) {
-    isClickable = common.parseBoolean(isClickable);
-    exec(null, self.errorHandler, this.id, 'setClickable', [isClickable]);
-    return this;
+  cordova.fireDocumentEvent('plugin_touch');
+  var self = this;
+  isClickable = common.parseBoolean(isClickable);
+  self.set("clickable", isClickable);
+  self.exec.call(self, null, self.errorHandler, this.id, 'setClickable', [isClickable]);
+  return this;
+};
+Map.prototype.getClickable = function() {
+  return this.get("clickable");
 };
 
 
@@ -466,9 +624,10 @@ Map.prototype.setClickable = function(isClickable) {
  * Sets the preference for whether all gestures should be enabled or disabled.
  */
 Map.prototype.setAllGesturesEnabled = function(enabled) {
-    enabled = common.parseBoolean(enabled);
-    exec(null, self.errorHandler, this.id, 'setAllGesturesEnabled', [enabled]);
-    return this;
+  var self = this;
+  enabled = common.parseBoolean(enabled);
+  self.exec.call(self, null, self.errorHandler, this.id, 'setAllGesturesEnabled', [enabled]);
+  return this;
 };
 
 /**
@@ -476,213 +635,332 @@ Map.prototype.setAllGesturesEnabled = function(enabled) {
  * @return {CameraPosition}
  */
 Map.prototype.getCameraPosition = function() {
-    return this.get("camera");
+  return this.get("camera");
 };
 
 /**
  * Remove the map completely.
  */
 Map.prototype.remove = function(callback) {
-    var self = this;
-    var div = this.get('div');
-    if (div) {
-        while (div) {
-            if (div.style) {
-                div.style.backgroundColor = '';
-            }
-            if (div.classList) {
-                div.classList.remove('_gmaps_cdv_');
-            } else if (div.className) {
-                div.className = div.className.replace(/_gmaps_cdv_/g, "");
-                div.className = div.className.replace(/\s+/g, " ");
-            }
-            div = div.parentNode;
+  var self = this;
+  if (self._isRemoved) {
+    return;
+  }
+  Object.defineProperty(self, "_isRemoved", {
+    value: true,
+    writable: false
+  });
+
+  self.trigger("remove");
+// var div = self.get('div');
+// if (div) {
+//   while (div) {
+//     if (div.style) {
+//       div.style.backgroundColor = '';
+//     }
+//     if (div.classList) {
+//       div.classList.remove('_gmaps_cdv_');
+//     } else if (div.className) {
+//       div.className = div.className.replace(/_gmaps_cdv_/g, "");
+//       div.className = div.className.replace(/\s+/g, " ");
+//     }
+//     div = div.parentNode;
+//   }
+// }
+// self.set('div', undefined);
+
+
+  // Close the active infoWindow
+  var active_marker = self.get("active_marker");
+  if (active_marker) {
+    active_marker.trigger(event.INFO_CLOSE);
+  }
+
+  var clearObj = function(obj) {
+    var ids = Object.keys(obj);
+    var id, instance;
+    for (var i = 0; i < ids.length; i++) {
+      id = ids[i];
+      instance = obj[id];
+      if (instance) {
+        if (typeof instance.remove === "function") {
+          instance.remove();
         }
+        instance.off();
+        delete obj[id];
+      }
     }
-    self.trigger("remove");
-    self.set('div', undefined);
-    self.clear();
-    self.empty();
-    self.off();
-    exec(function() {
-        if (typeof callback === "function") {
-            callback.call(self);
-        }
-    }, self.errorHandler, 'CordovaGoogleMaps', 'removeMap', [self.id]);
+    obj = {};
+  };
+
+  clearObj(self.OVERLAYS);
+  clearObj(self.MARKERS);
+
+
+  var resolver = function(resolve, reject) {
+    self.exec.call(self,
+      resolve.bind(self),
+      reject.bind(self),
+      'CordovaGoogleMaps', 'removeMap', [self.id],
+      {
+        sync: true,
+        remove: true
+      });
+  };
+
+  if (typeof callback === "function") {
+    resolver(callback, self.errorHandler);
+  } else {
+    return new Promise(resolver);
+  }
 };
 
 
 Map.prototype.toDataURL = function(params, callback) {
-    var args = [params || {}, callback];
-    if (typeof args[0] === "function") {
-        args.unshift({});
-    }
+  var args = [params || {}, callback];
+  if (typeof args[0] === "function") {
+    args.unshift({});
+  }
 
-    params = args[0];
-    callback = args[1];
+  params = args[0];
+  callback = args[1];
 
-    params.uncompress = params.uncompress === true;
-    var self = this;
-    exec(function(image) {
-        if (typeof callback === "function") {
-            callback.call(self, image);
-        }
-    }, self.errorHandler, self.id, 'toDataURL', [params]);
+  params.uncompress = params.uncompress === true;
+  var self = this;
+
+  var resolver = function(resolve, reject) {
+    self.exec.call(self,
+      resolve.bind(self),
+      reject.bind(self),
+      self.id, 'toDataURL', [params]);
+  };
+
+  if (typeof callback === "function") {
+    resolver(callback, self.errorHandler);
+  } else {
+    return new Promise(resolver);
+  }
 };
 
 /**
  * Show the map into the specified div.
  */
 Map.prototype.getDiv = function() {
-    return this.get("div");
+  return this.get("div");
 };
 
 /**
  * Show the map into the specified div.
  */
 Map.prototype.setDiv = function(div) {
-    var self = this,
-        args = [];
+  var self = this,
+    args = [];
 
-    if (!common.isDom(div)) {
-        div = self.get("div");
-        if (common.isDom(div)) {
-          div.removeAttribute("__pluginMapId");
-        }
-        self.set("div", null);
-    } else {
-        var currentDiv = self.get("div");
-        div.setAttribute("__pluginMapId", self.id);
-
-        // Webkit redraw mandatory
-        // http://stackoverflow.com/a/3485654/697856
-        div.style.display='none';
-        div.offsetHeight;
-        div.style.display='';
-
-        self.set("div", div);
-        elemId = div.getAttribute("__pluginDomId");
-        if (!elemId) {
-            elemId = "pgm" + Math.floor(Math.random() * Date.now());
-            div.setAttribute("__pluginDomId", elemId);
-        }
-        args.push(elemId);
-        while (div.parentNode) {
-            div.style.backgroundColor = 'rgba(0,0,0,0)';
-
-            // prevent multiple readding the class
-            if (div.classList && !div.classList.contains('_gmaps_cdv_')) {
-                div.classList.add('_gmaps_cdv_');
-            } else if (div.className && div.className.indexOf('_gmaps_cdv_') === -1) {
-                div.className = div.className + ' _gmaps_cdv_';
-            }
-
-            div = div.parentNode;
-        }
+  if (!common.isDom(div)) {
+    div = self.get("div");
+    if (common.isDom(div)) {
+      div.removeAttribute("__pluginMapId");
     }
-    exec(function() {
-        self.refreshLayout();
-    }, self.errorHandler, self.id, 'setDiv', args);
-    return self;
+    self.set("div", null);
+  } else {
+    div.setAttribute("__pluginMapId", self.id);
+
+    // Insert the infoWindow layer
+    if (self._layers.info.parentNode) {
+      try {
+        self._layers.info.parentNode.removeChild(self._layers.info.parentNode);
+      } catch(e) {
+        //ignore
+      }
+    }
+    var positionCSS;
+    for (var i = 0; i < div.children.length; i++) {
+      positionCSS = common.getStyle(div.children[i], "position");
+      if (positionCSS === "static") {
+        div.children[i].style.position = "relative";
+      }
+    }
+    div.insertBefore(self._layers.info, div.firstChild);
+
+    // Webkit redraw mandatory
+    // http://stackoverflow.com/a/3485654/697856
+    div.style.display = 'none';
+    div.offsetHeight;
+    div.style.display = '';
+
+    self.set("div", div);
+
+    positionCSS = common.getStyle(div, "position");
+    if (!positionCSS || positionCSS === "static") {
+      div.style.position = "relative";
+    }
+    elemId = common.getPluginDomId(div);
+    args.push(elemId);
+    while (div.parentNode) {
+      div.style.backgroundColor = 'rgba(0,0,0,0)';
+
+      // prevent multiple readding the class
+      if (div.classList && !div.classList.contains('_gmaps_cdv_')) {
+        div.classList.add('_gmaps_cdv_');
+      } else if (div.className && div.className.indexOf('_gmaps_cdv_') === -1) {
+        div.className = div.className + ' _gmaps_cdv_';
+      }
+
+      div = div.parentNode;
+    }
+  }
+  self.exec.call(self, function() {
+    cordova.fireDocumentEvent('plugin_touch', {
+      force: true,
+      action: "setDiv"
+    });
+    self.refreshLayout();
+  }, self.errorHandler, self.id, 'setDiv', args, {
+    sync: true
+  });
+  return self;
 };
 
 /**
-* Return the visible region of the map.
-*/
+ * Return the visible region of the map.
+ */
 Map.prototype.getVisibleRegion = function(callback) {
-   var self = this;
-   var cameraPosition = self.get("camera");
+  var self = this;
+  var cameraPosition = self.get("camera");
+  if (!cameraPosition || !cameraPosition.southwest || !cameraPosition.northeast) {
+    return null;
+  }
 
-   var latLngBounds = new LatLngBounds(cameraPosition.northeast, cameraPosition.southwest);
+  var latLngBounds = new VisibleRegion(
+    cameraPosition.southwest,
+    cameraPosition.northeast,
+    cameraPosition.farLeft,
+    cameraPosition.farRight,
+    cameraPosition.nearLeft,
+    cameraPosition.nearRight
+  );
 
-   if (typeof callback === "function") {
-     console.log("[deprecated] getVisibleRegion() is changed. Please check out the https://goo.gl/yHstHQ");
-     callback.call(self, latLngBounds);
-   }
-
-   return latLngBounds;
+  if (typeof callback === "function") {
+    console.log("[deprecated] getVisibleRegion() is changed. Please check out the https://goo.gl/yHstHQ");
+    callback.call(self, latLngBounds);
+  }
+  return latLngBounds;
 };
 
 /**
  * Maps an Earth coordinate to a point coordinate in the map's view.
  */
 Map.prototype.fromLatLngToPoint = function(latLng, callback) {
-    var self = this;
-    if ("lat" in latLng && "lng" in latLng) {
-        exec(function(result) {
-            if (typeof callback === "function") {
-                callback.call(self, result);
-            }
-        }, self.errorHandler, self.id, 'fromLatLngToPoint', [latLng.lat, latLng.lng]);
+  var self = this;
+
+  if ("lat" in latLng && "lng" in latLng) {
+
+    var resolver = function(resolve, reject) {
+      self.exec.call(self,
+        resolve.bind(self),
+        reject.bind(self),
+        self.id, 'fromLatLngToPoint', [latLng.lat, latLng.lng]);
+    };
+
+    if (typeof callback === "function") {
+      resolver(callback, self.errorHandler);
     } else {
-        if (typeof callback === "function") {
-            callback.call(self, [undefined, undefined]);
-        }
+      return new Promise(resolver);
     }
+  } else {
+    var rejector = function(resolve, reject) {
+      reject("The latLng is invalid");
+    };
+
+    if (typeof callback === "function") {
+      rejector(callback, self.errorHandler);
+    } else {
+      return new Promise(rejector);
+    }
+  }
 
 };
 /**
  * Maps a point coordinate in the map's view to an Earth coordinate.
  */
 Map.prototype.fromPointToLatLng = function(pixel, callback) {
-    var self = this;
-    if (pixel.length == 2 && utils.isArray(pixel)) {
-        exec(function(result) {
-            if (typeof callback === "function") {
-                var latLng = new LatLng(result[0] || 0, result[1] || 0);
-                callback.call(self, latLng);
-            }
-        }, self.errorHandler, self.id, 'fromPointToLatLng', [pixel[0], pixel[1]]);
+  var self = this;
+  if (typeof pixel === "object" && "x" in pixel && "y" in pixel) {
+    pixel = [pixel.x, pixel.y];
+  }
+  if (pixel.length == 2 && utils.isArray(pixel)) {
+
+    var resolver = function(resolve, reject) {
+      self.exec.call(self,
+        function(result) {
+          var latLng = new LatLng(result[0] || 0, result[1] || 0);
+          resolve.call(self, latLng);
+        },
+        reject.bind(self),
+        self.id, 'fromPointToLatLng', [pixel[0], pixel[1]]);
+    };
+
+    if (typeof callback === "function") {
+      resolver(callback, self.errorHandler);
     } else {
-        if (typeof callback === "function") {
-            callback.call(self, undefined);
-        }
+      return new Promise(resolver);
     }
+  } else {
+    var rejector = function(resolve, reject) {
+      reject("The pixel[] argument is invalid");
+    };
+
+    if (typeof callback === "function") {
+      rejector(callback, self.errorHandler);
+    } else {
+      return new Promise(rejector);
+    }
+  }
 
 };
 
 Map.prototype.setPadding = function(p1, p2, p3, p4) {
-    if (arguments.length === 0 || arguments.length > 4) {
-        return this;
-    }
-    var padding = {};
-    padding.top = parseInt(p1, 10);
-    switch (arguments.length) {
-        case 4:
-            // top right bottom left
-            padding.right = parseInt(p2, 10);
-            padding.bottom = parseInt(p3, 10);
-            padding.left = parseInt(p4, 10);
-            break;
-
-        case 3:
-            // top right&left bottom
-            padding.right = parseInt(p2, 10);
-            padding.left = padding.right;
-            padding.bottom = parseInt(p3, 10);
-            break;
-
-        case 2:
-            // top & bottom right&left
-            padding.bottom = parseInt(p1, 10);
-            padding.right = parseInt(p2, 10);
-            padding.left = padding.right;
-            break;
-
-        case 1:
-            // top & bottom right & left
-            padding.bottom = padding.top;
-            padding.right = padding.top;
-            padding.left = padding.top;
-            break;
-    }
-    exec(function(result) {
-        if (typeof callback === "function") {
-            var latLng = new LatLng(result[0] || 0, result[1] || 0);
-            callback.call(self, result);
-        }
-    }, self.errorHandler, this.id, 'setPadding', [padding]);
+  if (arguments.length === 0 || arguments.length > 4) {
     return this;
+  }
+  var padding = {};
+  padding.top = parseInt(p1, 10);
+  switch (arguments.length) {
+    case 4:
+      // top right bottom left
+      padding.right = parseInt(p2, 10);
+      padding.bottom = parseInt(p3, 10);
+      padding.left = parseInt(p4, 10);
+      break;
+
+    case 3:
+      // top right&left bottom
+      padding.right = parseInt(p2, 10);
+      padding.left = padding.right;
+      padding.bottom = parseInt(p3, 10);
+      break;
+
+    case 2:
+      // top & bottom right&left
+      padding.bottom = parseInt(p1, 10);
+      padding.right = parseInt(p2, 10);
+      padding.left = padding.right;
+      break;
+
+    case 1:
+      // top & bottom right & left
+      padding.bottom = padding.top;
+      padding.right = padding.top;
+      padding.left = padding.top;
+      break;
+  }
+  this.exec.call(this, function(result) {
+    if (typeof callback === "function") {
+      var latLng = new LatLng(result[0] || 0, result[1] || 0);
+      callback.call(self, result);
+    }
+  }, self.errorHandler, this.id, 'setPadding', [padding]);
+  return this;
 };
 
 
@@ -690,271 +968,429 @@ Map.prototype.setPadding = function(p1, p2, p3, p4) {
 // KML Layer
 //-------------
 Map.prototype.addKmlOverlay = function(kmlOverlayOptions, callback) {
-    var self = this;
-    kmlOverlayOptions = kmlOverlayOptions || {};
-    kmlOverlayOptions.url = kmlOverlayOptions.url || null;
+  var self = this;
+  kmlOverlayOptions = kmlOverlayOptions || {};
+  kmlOverlayOptions.url = kmlOverlayOptions.url || null;
+  kmlOverlayOptions.clickable = common.defaultTrueOption(kmlOverlayOptions.clickable);
+  kmlOverlayOptions.suppressInfoWindows = kmlOverlayOptions.suppressInfoWindows === true;
 
-    var kmlId = "kml" + (Math.random() * 9999999).toFixed(0);
-    kmlOverlayOptions.kmlId = kmlId;
+  var invisible_dot = self.get("invisible_dot");
+  if (!invisible_dot || invisible_dot._isRemoved) {
+    // Create an invisible marker for kmlOverlay
+    self.set("invisible_dot", self.addMarker({
+      position: {
+        lat: 0,
+        lng: 0
+      },
+      icon: "skyblue",
+      visible: false
+    }));
+  }
 
-    var kmlOverlay = new KmlOverlay(self, kmlId, kmlOverlayOptions);
-    self.OVERLAYS[kmlId] = kmlOverlay;
-    self.KML_LAYERS[kmlId] = kmlOverlay;
+  var resolver = function(resolve, reject) {
 
-    exec(function() {
-        kmlOverlay.one(kmlId + "_remove", function() {
-            kmlOverlay.off();
-            delete self.KML_LAYERS[kmlId];
-            delete self.OVERLAYS[kmlId];
-            kmlOverlay = undefined;
-        });
-        if (typeof callback === "function") {
-            callback.call(self, kmlOverlay, self);
-        }
-    }, self.errorHandler, self.id, 'loadPlugin', ['KmlOverlay', kmlOverlayOptions]);
+    var loader = new KmlLoader(self, self.exec, kmlOverlayOptions);
+    loader.parseKmlFile(function(camera, kmlData) {
+      if (kmlData instanceof BaseClass) {
+        kmlData = new BaseArrayClass([kmlData]);
+      }
+      var kmlId = "kmloverlay_" + Math.floor(Math.random() * Date.now());
+      var kmlOverlay = new KmlOverlay(self, kmlId, camera, kmlData, kmlOverlayOptions);
+      self.OVERLAYS[kmlId] = kmlOverlay;
+      resolve.call(self, kmlOverlay);
+    });
 
+  };
+
+  if (typeof callback === "function") {
+    resolver(callback, self.errorHandler);
+  } else {
+    return new Promise(resolver);
+  }
 };
+
+
 
 //-------------
 // Ground overlay
 //-------------
 Map.prototype.addGroundOverlay = function(groundOverlayOptions, callback) {
-    var self = this;
-    groundOverlayOptions = groundOverlayOptions || {};
-    groundOverlayOptions.url = groundOverlayOptions.url || null;
-    groundOverlayOptions.clickable = groundOverlayOptions.clickable === true;
-    groundOverlayOptions.visible = common.defaultTrueOption(groundOverlayOptions.visible);
-    groundOverlayOptions.zIndex = groundOverlayOptions.zIndex || 0;
-    groundOverlayOptions.bounds = common.convertToPositionArray(groundOverlayOptions.bounds);
+  var self = this;
+  groundOverlayOptions = groundOverlayOptions || {};
+  groundOverlayOptions.url = groundOverlayOptions.url || null;
+  groundOverlayOptions.clickable = groundOverlayOptions.clickable === true;
+  groundOverlayOptions.visible = common.defaultTrueOption(groundOverlayOptions.visible);
+  groundOverlayOptions.zIndex = groundOverlayOptions.zIndex || 0;
+  groundOverlayOptions.bounds = common.convertToPositionArray(groundOverlayOptions.bounds);
+  groundOverlayOptions.noCaching = true;
 
-    exec(function(result) {
-        groundOverlayOptions.hashCode = result.hashCode;
-        var groundOverlay = new GroundOverlay(self, result.id, groundOverlayOptions);
-        self.OVERLAYS[result.id] = groundOverlay;
-        groundOverlay.one(result.id + "_remove", function() {
-            groundOverlay.off();
-            delete self.OVERLAYS[result.id];
-            groundOverlay = undefined;
-        });
-        if (typeof callback === "function") {
-            callback.call(self, groundOverlay, self);
-        }
-    }, self.errorHandler, self.id, 'loadPlugin', ['GroundOverlay', groundOverlayOptions]);
+  var groundOverlay = new GroundOverlay(self, groundOverlayOptions, exec);
+  var groundOverlayId = groundOverlay.getId();
+  self.OVERLAYS[groundOverlayId] = groundOverlay;
+  groundOverlay.one(groundOverlayId + "_remove", function() {
+    groundOverlay.off();
+    delete self.OVERLAYS[groundOverlayId];
+    groundOverlay = undefined;
+  });
 
+  self.exec.call(self, function(result) {
+    groundOverlay._privateInitialize();
+    delete groundOverlay._privateInitialize;
+    if (typeof callback === "function") {
+      callback.call(self, groundOverlay);
+    }
+  }, self.errorHandler, self.id, 'loadPlugin', ['GroundOverlay', groundOverlayOptions, groundOverlay.hashCode]);
+
+  return groundOverlay;
 };
 
 //-------------
 // Tile overlay
 //-------------
 Map.prototype.addTileOverlay = function(tilelayerOptions, callback) {
-    var self = this;
-    tilelayerOptions = tilelayerOptions || {};
-    tilelayerOptions.tileUrlFormat = tilelayerOptions.tileUrlFormat || null;
-    if (typeof tilelayerOptions.tileUrlFormat === "string") {
-        console.log("[deprecated] the tileUrlFormat property is now deprecated. Use the getTile property.");
-        tilelayerOptions.getTile = function(x, y, zoom) {
-          return tilelayerOptions.tileUrlFormat.replace(/<x>/gi, x)
-                    .replace(/<y>/gi, y)
-                    .replace(/<zoom>/gi, zoom);
-        };
-    }
-    if (typeof tilelayerOptions.getTile !== "function") {
-      throw new Error("[error] the getTile property is required.");
-    }
-    tilelayerOptions.visible = common.defaultTrueOption(tilelayerOptions.visible);
-    tilelayerOptions.zIndex = tilelayerOptions.zIndex || 0;
-    tilelayerOptions.tileSize = tilelayerOptions.tileSize || 256;
-    tilelayerOptions.opacity = tilelayerOptions.opacity || 1;
-    tilelayerOptions.userAgent = tilelayerOptions.userAgent || navigator.userAgent;
-
-    var options = {
-        visible: tilelayerOptions.visible,
-        zIndex: tilelayerOptions.zIndex,
-        tileSize: tilelayerOptions.tileSize,
-        opacity: tilelayerOptions.opacity,
-        userAgent: tilelayerOptions.userAgent,
-        _id : Math.floor(Math.random() * Date.now())
+  var self = this;
+  tilelayerOptions = tilelayerOptions || {};
+  tilelayerOptions.tileUrlFormat = tilelayerOptions.tileUrlFormat || null;
+  if (typeof tilelayerOptions.tileUrlFormat === "string") {
+    console.log("[deprecated] the tileUrlFormat property is now deprecated. Use the getTile property.");
+    tilelayerOptions.getTile = function(x, y, zoom) {
+      return tilelayerOptions.tileUrlFormat.replace(/<x>/gi, x)
+        .replace(/<y>/gi, y)
+        .replace(/<zoom>/gi, zoom);
     };
+  }
+  if (typeof tilelayerOptions.getTile !== "function") {
+    throw new Error("[error] the getTile property is required.");
+  }
+  tilelayerOptions.visible = common.defaultTrueOption(tilelayerOptions.visible);
+  tilelayerOptions.zIndex = tilelayerOptions.zIndex || 0;
+  tilelayerOptions.tileSize = tilelayerOptions.tileSize || 512;
+  tilelayerOptions.opacity = (tilelayerOptions.opacity === null || tilelayerOptions.opacity === undefined) ? 1 : tilelayerOptions.opacity;
+  tilelayerOptions.debug = tilelayerOptions.debug === true;
+  tilelayerOptions.userAgent = tilelayerOptions.userAgent || navigator.userAgent;
 
-    document.addEventListener(self.id + "-" + options._id + "-tileoverlay", function(params) {
-        var url = tilelayerOptions.getTile(params.x, params.y, params.zoom);
-        if (!url || url === "(null)" || url === "undefined" || url === "null") {
-          url = "(null)";
-        }
-        exec(null, self.errorHandler, self.id + "-tileoverlay", 'onGetTileUrlFromJS', [options._id, url]);
-    });
 
-    exec(function(result) {
-        tilelayerOptions.hashCode = result.hashCode;
-        var tileOverlay = new TileOverlay(self, result.id, tilelayerOptions);
-        self.OVERLAYS[result.id] = tileOverlay;
-        tileOverlay.one(result.id + "_remove", function() {
-            tileOverlay.off();
-            delete self.OVERLAYS[result.id];
-            tileOverlay = undefined;
-        });
-        if (typeof callback === "function") {
-            callback.call(self, tileOverlay, self);
-        }
-    }, self.errorHandler, self.id, 'loadPlugin', ['TileOverlay', options]);
+  var tileOverlay = new TileOverlay(self, tilelayerOptions, exec);
+  var tileOverlayId = tileOverlay.getId();
+  self.OVERLAYS[tileOverlayId] = tileOverlay;
+  var hashCode = tileOverlay.hashCode;
+
+  tileOverlay.one(tileOverlayId + "_remove", function() {
+    document.removeEventListener(tileOverlayId + "-" + hashCode + "-tileoverlay", onNativeCallback);
+    tileOverlay.off();
+    delete self.OVERLAYS[tileOverlayId];
+    tileOverlay = undefined;
+  });
+
+  var options = {
+    visible: tilelayerOptions.visible,
+    zIndex: tilelayerOptions.zIndex,
+    tileSize: tilelayerOptions.tileSize,
+    opacity: tilelayerOptions.opacity,
+    userAgent: tilelayerOptions.userAgent,
+    debug: tilelayerOptions.debug
+  };
+
+  var onNativeCallback = function(params) {
+    var url = tilelayerOptions.getTile(params.x, params.y, params.zoom);
+    if (!url || url === "(null)" || url === "undefined" || url === "null") {
+      url = "(null)";
+    }
+    cordova_exec(null, self.errorHandler, self.id + "-tileoverlay", 'onGetTileUrlFromJS', [hashCode, params.key, url]);
+  };
+  document.addEventListener(self.id + "-" + hashCode + "-tileoverlay", onNativeCallback);
+
+  self.exec.call(self, function(result) {
+    tileOverlay._privateInitialize();
+    delete tileOverlay._privateInitialize;
+
+    if (typeof callback === "function") {
+      callback.call(self, tileOverlay);
+    }
+  }, self.errorHandler, self.id, 'loadPlugin', ['TileOverlay', options, hashCode]);
+
+  return tileOverlay;
 };
 
 //-------------
 // Polygon
 //-------------
 Map.prototype.addPolygon = function(polygonOptions, callback) {
-    var self = this;
-    polygonOptions.points = polygonOptions.points || [];
-    var _orgs = polygonOptions.points;
-    polygonOptions.points = common.convertToPositionArray(polygonOptions.points);
-    polygonOptions.holes = polygonOptions.holes || [];
-    if (polygonOptions.holes.length > 0 && !Array.isArray(polygonOptions.holes[0])) {
-        polygonOptions.holes = [polygonOptions.holes];
+  var self = this;
+  polygonOptions.points = polygonOptions.points || [];
+  var _orgs = polygonOptions.points;
+  polygonOptions.points = common.convertToPositionArray(polygonOptions.points);
+  polygonOptions.holes = polygonOptions.holes || [];
+  if (polygonOptions.holes.length > 0 && !Array.isArray(polygonOptions.holes[0])) {
+    polygonOptions.holes = [polygonOptions.holes];
+  }
+  polygonOptions.holes = polygonOptions.holes.map(function(hole) {
+    if (!utils.isArray(hole)) {
+      return [];
     }
-    polygonOptions.holes = polygonOptions.holes.map(function(hole) {
-        if (!utils.isArray(hole)) {
-            return [];
-        }
-        return hole.map(common.convertToPositionArray);
+    return hole.map(function(position) {
+      return {
+        "lat": position.lat,
+        "lng": position.lng
+      };
     });
-    polygonOptions.strokeColor = common.HTMLColor2RGBA(polygonOptions.strokeColor || "#FF000080", 0.75);
-    if (polygonOptions.fillColor) {
-        polygonOptions.fillColor = common.HTMLColor2RGBA(polygonOptions.fillColor || "#FF000080", 0.75);
-    } else {
-        polygonOptions.fillColor = common.HTMLColor2RGBA("#FF000080", 0.75);
-    }
-    polygonOptions.strokeWidth = polygonOptions.strokeWidth || 10;
-    polygonOptions.visible = common.defaultTrueOption(polygonOptions.visible);
-    polygonOptions.clickable = polygonOptions.clickable === true;
-    polygonOptions.zIndex = polygonOptions.zIndex || 0;
-    polygonOptions.geodesic = polygonOptions.geodesic === true;
+  });
+  polygonOptions.strokeColor = common.HTMLColor2RGBA(polygonOptions.strokeColor || "#FF000080", 0.75);
+  if (polygonOptions.fillColor) {
+    polygonOptions.fillColor = common.HTMLColor2RGBA(polygonOptions.fillColor || "#FF000080", 0.75);
+  } else {
+    polygonOptions.fillColor = common.HTMLColor2RGBA("#FF000080", 0.75);
+  }
+  polygonOptions.strokeWidth = "strokeWidth" in polygonOptions ? polygonOptions.strokeWidth : 10;
+  polygonOptions.visible = common.defaultTrueOption(polygonOptions.visible);
+  polygonOptions.clickable = polygonOptions.clickable === true;
+  polygonOptions.zIndex = polygonOptions.zIndex || 0;
+  polygonOptions.geodesic = polygonOptions.geodesic === true;
 
-    exec(function(result) {
-        polygonOptions.hashCode = result.hashCode;
-        polygonOptions.points = _orgs;
-        var polygon = new Polygon(self, result.id, polygonOptions);
-        self.OVERLAYS[result.id] = polygon;
-        polygon.one(result.id + "_remove", function() {
-            polygon.off();
-            delete self.OVERLAYS[result.id];
-            polygon = undefined;
-        });
-        if (typeof callback === "function") {
-            callback.call(self, polygon, self);
-        }
-    }, self.errorHandler, self.id, 'loadPlugin', ["Polygon", polygonOptions]);
+  var opts = JSON.parse(JSON.stringify(polygonOptions));
+  polygonOptions.points = _orgs;
+  var polygon = new Polygon(self, polygonOptions, exec);
+  var polygonId = polygon.getId();
+  self.OVERLAYS[polygonId] = polygon;
+  polygon.one(polygonId + "_remove", function() {
+    polygon.off();
+    delete self.OVERLAYS[polygonId];
+    polygon = undefined;
+  });
+
+  self.exec.call(self, function(result) {
+    polygon._privateInitialize();
+    delete polygon._privateInitialize;
+
+    if (typeof callback === "function") {
+      callback.call(self, polygon);
+    }
+  }, self.errorHandler, self.id, 'loadPlugin', ["Polygon", opts, polygon.hashCode]);
+
+  return polygon;
 };
 
 //-------------
 // Polyline
 //-------------
 Map.prototype.addPolyline = function(polylineOptions, callback) {
-    var self = this;
-    polylineOptions.points = polylineOptions.points || [];
-    var _orgs = polylineOptions.points;
-    polylineOptions.points = common.convertToPositionArray(polylineOptions.points);
-    polylineOptions.color = common.HTMLColor2RGBA(polylineOptions.color || "#FF000080", 0.75);
-    polylineOptions.width = polylineOptions.width || 10;
-    polylineOptions.visible = common.defaultTrueOption(polylineOptions.visible);
-    polylineOptions.clickable = polylineOptions.clickable === true;
-    polylineOptions.zIndex = polylineOptions.zIndex || 0;
-    polylineOptions.geodesic = polylineOptions.geodesic === true;
-    exec(function(result) {
-        polylineOptions.points = _orgs;
-        polylineOptions.hashCode = result.hashCode;
-        var polyline = new Polyline(self, result.id, polylineOptions);
-        self.OVERLAYS[result.id] = polyline;
-        polyline.one(result.id + "_remove", function() {
-            polyline.off();
-            delete self.OVERLAYS[result.id];
-            polyline = undefined;
-        });
-        if (typeof callback === "function") {
-            callback.call(self, polyline, self);
-        }
-    }, self.errorHandler, self.id, 'loadPlugin', ['Polyline', polylineOptions]);
+  var self = this;
+  polylineOptions.points = polylineOptions.points || [];
+  var _orgs = polylineOptions.points;
+  polylineOptions.points = common.convertToPositionArray(polylineOptions.points);
+  polylineOptions.color = common.HTMLColor2RGBA(polylineOptions.color || "#FF000080", 0.75);
+  polylineOptions.width = "width" in polylineOptions ? polylineOptions.width : 10;
+  polylineOptions.visible = common.defaultTrueOption(polylineOptions.visible);
+  polylineOptions.clickable = polylineOptions.clickable === true;
+  polylineOptions.zIndex = polylineOptions.zIndex || 0;
+  polylineOptions.geodesic = polylineOptions.geodesic === true;
+
+  var opts = JSON.parse(JSON.stringify(polylineOptions));
+  polylineOptions.points = _orgs;
+  var polyline = new Polyline(self, polylineOptions, exec);
+  var polylineId = polyline.getId();
+  self.OVERLAYS[polylineId] = polyline;
+
+  polyline.one(polylineId + "_remove", function() {
+    polyline.off();
+    delete self.OVERLAYS[polylineId];
+    polyline = undefined;
+  });
+
+  self.exec.call(self, function(result) {
+    polyline._privateInitialize();
+    delete polyline._privateInitialize;
+
+    if (typeof callback === "function") {
+      callback.call(self, polyline);
+    }
+  }, self.errorHandler, self.id, 'loadPlugin', ['Polyline', opts, polyline.hashCode]);
+
+  return polyline;
 };
 
 //-------------
 // Circle
 //-------------
 Map.prototype.addCircle = function(circleOptions, callback) {
-    var self = this;
-    circleOptions.center = circleOptions.center || {};
-    circleOptions.center.lat = circleOptions.center.lat || 0.0;
-    circleOptions.center.lng = circleOptions.center.lng || 0.0;
-    circleOptions.strokeColor = common.HTMLColor2RGBA(circleOptions.strokeColor || "#FF0000", 0.75);
-    circleOptions.fillColor = common.HTMLColor2RGBA(circleOptions.fillColor || "#000000", 0.75);
-    circleOptions.strokeWidth = circleOptions.strokeWidth || 10;
-    circleOptions.visible = common.defaultTrueOption(circleOptions.visible);
-    circleOptions.zIndex = circleOptions.zIndex || 0;
-    circleOptions.radius = circleOptions.radius || 1;
+  var self = this;
+  circleOptions.center = circleOptions.center || {};
+  circleOptions.center.lat = circleOptions.center.lat || 0.0;
+  circleOptions.center.lng = circleOptions.center.lng || 0.0;
+  circleOptions.strokeColor = common.HTMLColor2RGBA(circleOptions.strokeColor || "#FF0000", 0.75);
+  circleOptions.fillColor = common.HTMLColor2RGBA(circleOptions.fillColor || "#000000", 0.75);
+  circleOptions.strokeWidth = "strokeWidth" in circleOptions ? circleOptions.strokeWidth : 10;
+  circleOptions.visible = common.defaultTrueOption(circleOptions.visible);
+  circleOptions.zIndex = circleOptions.zIndex || 0;
+  circleOptions.radius = "radius" in circleOptions ? circleOptions.radius : 1;
 
-    exec(function(result) {
-        circleOptions.hashCode = result.hashCode;
-        var circle = new Circle(self, result.id, circleOptions);
-        self.OVERLAYS[result.id] = circle;
+  var circle = new Circle(self, circleOptions, exec);
+  var circleId = circle.getId();
+  self.OVERLAYS[circleId] = circle;
+  circle.one(circleId + "_remove", function() {
+    circle.off();
+    delete self.OVERLAYS[circleId];
+    circle = undefined;
+  });
 
-        circle.one(result.id + "_remove", function() {
-            circle.off();
-            delete self.OVERLAYS[result.id];
-            circle = undefined;
-        });
-        if (typeof callback === "function") {
-            callback.call(self, circle, self);
-        }
-    }, self.errorHandler, self.id, 'loadPlugin', ['Circle', circleOptions]);
+  self.exec.call(self, function(result) {
+    circle._privateInitialize();
+    delete circle._privateInitialize;
+
+    if (typeof callback === "function") {
+      callback.call(self, circle);
+    }
+  }, self.errorHandler, self.id, 'loadPlugin', ['Circle', circleOptions, circle.hashCode]);
+
+  return circle;
 };
 
 //-------------
 // Marker
 //-------------
+
 Map.prototype.addMarker = function(markerOptions, callback) {
-    var self = this;
-    markerOptions.animation = markerOptions.animation || undefined;
-    markerOptions.position = markerOptions.position || {};
-    markerOptions.position.lat = markerOptions.position.lat || 0.0;
-    markerOptions.position.lng = markerOptions.position.lng || 0.0;
-    markerOptions.draggable = markerOptions.draggable === true;
-    markerOptions.icon = markerOptions.icon || undefined;
-    markerOptions.snippet = typeof(markerOptions.snippet) === "string" ? markerOptions.snippet : undefined;
-    markerOptions.title = typeof(markerOptions.title) === "string" ? markerOptions.title : undefined;
-    markerOptions.visible = common.defaultTrueOption(markerOptions.visible);
-    markerOptions.flat = markerOptions.flat === true;
-    markerOptions.rotation = markerOptions.rotation || 0;
-    markerOptions.opacity = parseFloat("" + markerOptions.opacity, 10) || 1;
-    markerOptions.disableAutoPan = markerOptions.disableAutoPan === true;
-    markerOptions.useHtmlInfoWnd = !markerOptions.title && !markerOptions.snippet;
-    markerOptions.noCache = markerOptions.noCache === true; //experimental
+  var self = this;
+  markerOptions = common.markerOptionsFilter(markerOptions);
 
-    if ("styles" in markerOptions) {
-        markerOptions.styles = typeof markerOptions.styles === "object" ? markerOptions.styles : {};
+  //------------------------------------
+  // Generate a makrer instance at once.
+  //------------------------------------
+  markerOptions.icon = markerOptions.icon || {};
+  if (typeof markerOptions.icon === 'string' || Array.isArray(markerOptions.icon)) {
+    markerOptions.icon = {
+      url: markerOptions.icon
+    };
+  }
 
-        if ("color" in markerOptions.styles) {
-            markerOptions.styles.color = common.HTMLColor2RGBA(markerOptions.styles.color || "#000000");
-        }
+  var marker = new Marker(self, markerOptions, exec);
+  var markerId = marker.getId();
+
+  self.MARKERS[markerId] = marker;
+  self.OVERLAYS[markerId] = marker;
+  marker.one(markerId + "_remove", function() {
+    delete self.MARKERS[markerId];
+    delete self.OVERLAYS[markerId];
+    marker.destroy();
+    marker = undefined;
+  });
+
+  self.exec.call(self, function(result) {
+
+    markerOptions.icon.size = markerOptions.icon.size || {};
+    markerOptions.icon.size.width = markerOptions.icon.size.width || result.width;
+    markerOptions.icon.size.height = markerOptions.icon.size.height || result.height;
+    markerOptions.icon.anchor = markerOptions.icon.anchor || [markerOptions.icon.size.width / 2, markerOptions.icon.size.height];
+
+    if (!markerOptions.infoWindowAnchor) {
+      markerOptions.infoWindowAnchor = [markerOptions.icon.size.width / 2, 0];
     }
-    if (markerOptions.icon && common.isHTMLColorString(markerOptions.icon)) {
-        markerOptions.icon = common.HTMLColor2RGBA(markerOptions.icon);
+    marker._privateInitialize(markerOptions);
+    delete marker._privateInitialize;
+
+    if (typeof callback === "function") {
+      callback.call(self, marker);
     }
+  }, self.errorHandler, self.id, 'loadPlugin', ['Marker', markerOptions, marker.hashCode]);
 
-    exec(function(result) {
-        markerOptions.hashCode = result.hashCode;
-        var marker = new Marker(self, result.id, markerOptions);
+  return marker;
+};
 
-        self.MARKERS[result.id] = marker;
-        self.OVERLAYS[result.id] = marker;
 
-        marker.one(result.id + "_remove", function() {
-            marker.off();
-            delete self.MARKERS[result.id];
-            delete self.OVERLAYS[result.id];
-            marker = undefined;
-        });
-        if (typeof callback === "function") {
-            callback.call(self, marker, self);
-        }
-    }, self.errorHandler, self.id, 'loadPlugin', ['Marker', markerOptions]);
+//------------------
+// Marker cluster
+//------------------
+Map.prototype.addMarkerCluster = function(markerClusterOptions, callback) {
+  var self = this;
+  if (typeof markerClusterOptions === "function") {
+    callback = markerClusterOptions;
+    markerClusterOptions = null;
+  }
+  markerClusterOptions = markerClusterOptions || {};
+  var positionList = markerClusterOptions.markers.map(function(marker) {
+    return marker.position;
+  });
+
+  var markerCluster = new MarkerCluster(self, {
+    "icons": markerClusterOptions.icons,
+    //"markerMap": markerMap,
+    "idxCount": positionList.length + 1,
+    "maxZoomLevel": Math.min(markerClusterOptions.maxZoomLevel || 15, 18),
+    "debug": markerClusterOptions.debug === true,
+    "boundsDraw": common.defaultTrueOption(markerClusterOptions.boundsDraw)
+  }, exec);
+  var markerClusterId = markerCluster.getId();
+  self.OVERLAYS[markerClusterId] = markerCluster;
+
+  self.exec.call(self, function(result) {
+
+    var markerMap = {};
+    result.geocellList.forEach(function(geocell, idx) {
+      var markerOptions = markerClusterOptions.markers[idx];
+      markerOptions = common.markerOptionsFilter(markerOptions);
+
+      var markerId = markerOptions.id || "marker_" + idx;
+      //markerId = result.id + "-" + markerId;
+      markerOptions.__pgmId = markerId;
+      markerOptions._cluster = {
+        isRemoved: false,
+        isAdded: false,
+        geocell: geocell,
+        _marker: null
+      };
+      /*
+            var marker = new Marker(self, markerId, markerOptions, "MarkerCluster", exec);
+            marker.set("isAdded", false, true);
+            marker.set("geocell", geocell, true);
+            marker.set("position", markerOptions.position, true);
+            marker.getId = function() {
+              return result.id + "-" + markerId;
+            };
+      */
+      markerMap[markerId] = markerOptions;
+
+      //self.MARKERS[marker.getId()] = marker;
+      //self.OVERLAYS[marker.getId()] = marker;
+    });
+
+    Object.defineProperty(markerCluster, "_markerMap", {
+      value: markerMap,
+      writable: false
+    });
+
+    markerCluster.one("remove", function() {
+      delete self.OVERLAYS[result.id];
+      /*
+            result.geocellList.forEach(function(geocell, idx) {
+              var markerOptions = markerClusterOptions.markers[idx];
+              var markerId = result.id + "-" + (markerOptions.id || "marker_" + idx);
+              var marker = self.MARKERS[markerId];
+              if (marker) {
+                marker.off();
+              }
+              //delete self.MARKERS[markerId];
+              delete self.OVERLAYS[markerId];
+            });
+      */
+      markerCluster.destroy();
+    });
+
+    markerCluster._privateInitialize();
+    delete markerCluster._privateInitialize;
+
+    markerCluster.redraw.call(markerCluster, {
+      force: true
+    });
+
+    if (typeof callback === "function") {
+      callback.call(self, markerCluster);
+    }
+  }, self.errorHandler, self.id, 'loadPlugin', ['MarkerCluster', {
+    "positionList": positionList,
+    "debug": markerClusterOptions.debug === true
+  }, markerCluster.hashCode]);
+
+  return markerCluster;
 };
 
 /*****************************************************************************
@@ -966,125 +1402,104 @@ Map.prototype._onSyncInfoWndPosition = function(eventName, points) {
 };
 
 Map.prototype._onMapEvent = function(eventName) {
-    var args = [eventName];
-    for (var i = 1; i < arguments.length; i++) {
-        args.push(arguments[i]);
-    }
-    this.trigger.apply(this, args);
+  if (!this._isReady) {
+    return;
+  }
+  var args = [eventName];
+  for (var i = 1; i < arguments.length; i++) {
+    args.push(arguments[i]);
+  }
+  this.trigger.apply(this, args);
 };
 
 Map.prototype._onMarkerEvent = function(eventName, markerId, position) {
-    var self = this;
-    var marker = self.MARKERS[markerId] || null;
-    if (marker) {
-        marker.set('position', position);
-        marker.trigger(eventName, position);
+  var self = this;
+  var marker = self.MARKERS[markerId] || null;
+
+  if (marker) {
+    marker.set('position', position);
+    if (eventName === event.INFO_OPEN) {
+      marker.set("isInfoWindowVisible", true);
     }
+    if (eventName === event.INFO_CLOSE) {
+      marker.set("isInfoWindowVisible", false);
+    }
+    marker.trigger(eventName, position, marker);
+  }
 };
 
-
-Map.prototype._onOverlayEvent = function(eventName, hashCode) {
-    var self = this;
-    var overlay = self.OVERLAYS[hashCode] || null;
-    if (overlay) {
-        var args = [eventName];
-        for (var i = 2; i < arguments.length; i++) {
-            args.push(arguments[i]);
+Map.prototype._onClusterEvent = function(eventName, markerClusterId, clusterId, position) {
+  var self = this;
+  var markerCluster = self.OVERLAYS[markerClusterId] || null;
+  if (markerCluster) {
+    if (/^marker_/i.test(clusterId)) {
+      // regular marker
+      var marker = markerCluster.getMarkerById(clusterId);
+      if (eventName === event.MARKER_CLICK) {
+        markerCluster.trigger(eventName, position, marker);
+      } else {
+        if (eventName === event.INFO_OPEN) {
+          marker.set("isInfoWindowVisible", true);
         }
-        overlay.trigger.apply(overlay, args);
-    }
-};
-
-Map.prototype._onKmlEvent = function(eventName, objectType, kmlLayerId, result, options) {
-    var self = this;
-    var kmlLayer = self.KML_LAYERS[kmlLayerId] || null;
-    if (!kmlLayer) {
-        return;
-    }
-    var args = [eventName];
-    if (eventName === "add") {
-        var overlay = null;
-
-        switch ((objectType + "").toLowerCase()) {
-            case "marker":
-                overlay = new Marker(self, result.id, options);
-                self.MARKERS[result.id] = overlay;
-                args.push({
-                    "type": "Marker",
-                    "object": overlay
-                });
-                overlay.on(event.MARKER_CLICK, function() {
-                    kmlLayer.trigger(event.OVERLAY_CLICK, overlay, overlay.getPosition());
-                });
-                break;
-
-            case "polygon":
-                overlay = new Polygon(self, result.id, options);
-                args.push({
-                    "type": "Polygon",
-                    "object": overlay
-                });
-
-                overlay.on(event.OVERLAY_CLICK, function(latLng) {
-                    kmlLayer.trigger(event.OVERLAY_CLICK, overlay, latLng);
-                });
-                break;
-
-            case "polyline":
-                overlay = new Polyline(self, result.id, options);
-                args.push({
-                    "type": "Polyline",
-                    "object": overlay
-                });
-                overlay.on(event.OVERLAY_CLICK, function(latLng) {
-                    kmlLayer.trigger(event.OVERLAY_CLICK, overlay, latLng);
-                });
-                break;
+        if (eventName === event.INFO_CLOSE) {
+          marker.set("isInfoWindowVisible", false);
         }
-        if (overlay) {
-            self.OVERLAYS[result.id] = overlay;
-            overlay.hashCode = result.hashCode;
-            kmlLayer._overlays.push(overlay);
-            kmlLayer.on("_REMOVE", function() {
-                var idx = kmlLayer._overlays.indexOf(overlay);
-                if (idx > -1) {
-                    kmlLayer._overlays.splice(idx, 1);
-                }
-                overlay.remove();
-                overlay.off();
-            });
-        }
+      }
+      marker.trigger(eventName, position, marker);
     } else {
-        for (var i = 2; i < arguments.length; i++) {
-            args.push(arguments[i]);
-        }
+      // cluster marker
+      var cluster = markerCluster.getClusterByClusterId(clusterId);
+      if (cluster) {
+        markerCluster.trigger(eventName, cluster);
+      } else {
+        console.log("-----> This is remained cluster icon : " + clusterId);
+      }
     }
-    //kmlLayer.trigger.apply(kmlLayer, args);
+  }
 };
 
+Map.prototype._onOverlayEvent = function(eventName, overlayId) {
+  var self = this;
+  var overlay = self.OVERLAYS[overlayId] || null;
+  if (overlay) {
+    var args = [eventName];
+    for (var i = 2; i < arguments.length; i++) {
+      args.push(arguments[i]);
+    }
+    args.push(overlay); // for ionic
+    overlay.trigger.apply(overlay, args);
+  }
+};
 
 Map.prototype.getCameraTarget = function() {
-    return this.get("camera_target");
+  return this.get("camera_target");
 };
 
 Map.prototype.getCameraZoom = function() {
-    return this.get("camera_zoom");
+  return this.get("camera_zoom");
 };
 Map.prototype.getCameraTilt = function() {
-    return this.get("camera_tilt");
+  return this.get("camera_tilt");
 };
 Map.prototype.getCameraBearing = function() {
-    return this.get("camera_bearing");
+  return this.get("camera_bearing");
 };
 
 Map.prototype._onCameraEvent = function(eventName, cameraPosition) {
-    this.set('camera', cameraPosition);
-    this.set('camera_target', cameraPosition.target);
-    this.set('camera_zoom', cameraPosition.zoom);
-    this.set('camera_bearing', cameraPosition.bearing);
-    this.set('camera_tilt', cameraPosition.viewAngle || cameraPosition.tilt);
-    this.set('camera_northeast', cameraPosition.northeast);
-    this.set('camera_southwest', cameraPosition.southwest);
+  this.set('camera', cameraPosition);
+  this.set('camera_target', cameraPosition.target);
+  this.set('camera_zoom', cameraPosition.zoom);
+  this.set('camera_bearing', cameraPosition.bearing);
+  this.set('camera_tilt', cameraPosition.viewAngle || cameraPosition.tilt);
+  this.set('camera_northeast', cameraPosition.northeast);
+  this.set('camera_southwest', cameraPosition.southwest);
+  this.set('camera_nearLeft', cameraPosition.nearLeft);
+  this.set('camera_nearRight', cameraPosition.nearRight);
+  this.set('camera_farLeft', cameraPosition.farLeft);
+  this.set('camera_farRight', cameraPosition.farRight);
+  if (this._isReady) {
     this.trigger(eventName, cameraPosition, this);
+  }
 };
+
 module.exports = Map;

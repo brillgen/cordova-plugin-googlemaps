@@ -1,14 +1,14 @@
 package plugin.google.maps;
 
 import android.content.res.AssetManager;
-import android.util.Log;
+import android.view.View;
 import android.webkit.WebView;
 
 import com.google.android.gms.maps.model.TileOverlay;
 import com.google.android.gms.maps.model.TileOverlayOptions;
-import com.google.android.gms.maps.model.TileProvider;
 
 import org.apache.cordova.CallbackContext;
+import org.apache.cordova.CordovaPreferences;
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
@@ -28,6 +28,7 @@ public class PluginTileOverlay extends MyPlugin implements MyPluginInterface {
 
 
     final JSONObject opts = args.getJSONObject(1);
+    final String id = args.getString(2);
     final int tileSize = opts.getInt("tileSize");
 
 
@@ -41,13 +42,18 @@ public class PluginTileOverlay extends MyPlugin implements MyPluginInterface {
     if (opts.has("opacity")) {
       options.transparency((float)(1 - opts.getDouble("opacity")));
     }
-    final String id = opts.getString("_id");
+
+    boolean isDebug = false;
+    if (opts.has("debug")) {
+      isDebug = opts.getBoolean("debug");
+    }
+    final boolean _isDebug = isDebug;
 
     cordova.getActivity().runOnUiThread(new Runnable() {
       @Override
       public void run() {
 
-        String userAgent = "Mozilla";
+        String userAgent = "";
         if (opts.has("userAgent")) {
           try {
             userAgent = opts.getString("userAgent");
@@ -55,10 +61,32 @@ public class PluginTileOverlay extends MyPlugin implements MyPluginInterface {
             //e.printStackTrace();
           }
         }
+        if ("".equals(userAgent)) {
+          View browserView = webView.getView();
+          String browserViewName = browserView.getClass().getName();
+          if ("org.xwalk.core.XWalkView".equals(browserViewName) ||
+              "org.crosswalk.engine.XWalkCordovaView".equals(browserViewName)) {
+
+            CordovaPreferences preferences = webView.getPreferences();
+            // Set xwalk webview settings by Cordova preferences.
+            String xwalkUserAgent = preferences == null ? "" : preferences.getString("xwalkUserAgent", "");
+            if (!xwalkUserAgent.isEmpty()) {
+              userAgent = xwalkUserAgent;
+            }
+
+            String appendUserAgent = preferences.getString("AppendUserAgent", "");
+            if (!appendUserAgent.isEmpty()) {
+              userAgent = userAgent + " " + appendUserAgent;
+            }
+          } else {
+            userAgent = ((WebView) webView.getEngine().getView()).getSettings().getUserAgentString();
+          }
+        }
+
         String currentPageUrl = webView.getUrl();
 
         AssetManager assetManager = cordova.getActivity().getAssets();
-        final PluginTileProvider tileProvider = new PluginTileProvider(pluginMap.mapId, id, webView, assetManager, currentPageUrl, userAgent, tileSize);
+        final PluginTileProvider tileProvider = new PluginTileProvider(pluginMap.getOverlayId(), id, webView, assetManager, currentPageUrl, userAgent, tileSize, _isDebug);
         tileProvider.setOnCacheClear(new PluginTileProvider.OnCacheClear() {
           @Override
           public void onCacheClear(int hashCode) {
@@ -75,12 +103,12 @@ public class PluginTileOverlay extends MyPlugin implements MyPluginInterface {
         TileOverlay tileOverlay = map.addTileOverlay(options);
         //String id = tileOverlay.getId();
 
-        self.objects.put("tileoverlay_" + id, tileOverlay);
-        self.objects.put("tileprovider_" + id, tileProvider);
+        pluginMap.objects.put("tileoverlay_" + id, tileOverlay);
+        pluginMap.objects.put("tileprovider_" + id, tileProvider);
 
         try {
           JSONObject result = new JSONObject();
-          result.put("hashCode", tileOverlay.hashCode());
+          result.put("hashCode", id);
           result.put("id", "tileoverlay_" + id);
           callbackContext.success(result);
         } catch (JSONException e) {
@@ -94,10 +122,11 @@ public class PluginTileOverlay extends MyPlugin implements MyPluginInterface {
   @SuppressWarnings("unused")
   public void onGetTileUrlFromJS(final JSONArray args, final CallbackContext callbackContext) throws JSONException {
     String id = args.getString(0);
-    String tileUrl = args.getString(1);
+    String urlKey = args.getString(1);
+    String tileUrl = args.getString(2);
     String pluginId = "tileprovider_" + id;
-    if (objects.containsKey(pluginId)) {
-      ((PluginTileProvider)(this.objects.get(pluginId))).onGetTileUrlFromJS(tileUrl);
+    if (pluginMap.objects.containsKey(pluginId)) {
+      ((PluginTileProvider)(this.pluginMap.objects.get(pluginId))).onGetTileUrlFromJS(urlKey, tileUrl);
     }
     callbackContext.success();
   }
@@ -134,24 +163,32 @@ public class PluginTileOverlay extends MyPlugin implements MyPluginInterface {
    */
   public void remove(final JSONArray args, final CallbackContext callbackContext) throws JSONException {
     String id = args.getString(0);
-    final TileOverlay tileOverlay = (TileOverlay)self.objects.get(id);
+    TileOverlay tileOverlay = (TileOverlay)pluginMap.objects.get(id);
     if (tileOverlay == null) {
-      this.sendNoResult(callbackContext);
+      callbackContext.success();
       return;
     }
     cordova.getActivity().runOnUiThread(new Runnable() {
       @Override
       public void run() {
 
-        tileOverlay.remove();
-        tileOverlay.clearTileCache();
-
         try {
           String id = args.getString(0);
+          TileOverlay tileOverlay = (TileOverlay)pluginMap.objects.remove(id);
+          if (tileOverlay != null) {
+            tileOverlay.clearTileCache();
+            tileOverlay.remove();
+            tileOverlay = null;
+          }
           id = id.replace("tileoverlay_", "tileprovider_");
-          self.objects.put(id, null);
-          self.objects.remove(id);
-          sendNoResult(callbackContext);
+
+          if (pluginMap.objects.containsKey(id)) {
+            ((PluginTileProvider)(pluginMap.objects.get(id))).remove();
+          }
+          //pluginMap.objects.put(id, null);
+          PluginTileProvider provider = (PluginTileProvider) pluginMap.objects.remove(id);
+          provider = null;
+          callbackContext.success();
         } catch (JSONException e) {
           e.printStackTrace();
           callbackContext.error("" + e.getMessage());

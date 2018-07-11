@@ -18,27 +18,26 @@ import org.apache.cordova.CordovaInterface;
 import org.apache.cordova.CordovaPlugin;
 import org.apache.cordova.CordovaWebView;
 import org.apache.cordova.PluginEntry;
-import org.apache.cordova.PluginResult;
 import org.json.JSONArray;
 import org.json.JSONException;
 
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public class MyPlugin extends CordovaPlugin implements MyPluginInterface {
-  protected ConcurrentHashMap<String, Object> objects;
   public MyPlugin self = null;
-  public final ConcurrentHashMap<String, Method> methods = new ConcurrentHashMap<String, Method>();
-  private static ExecutorService executorService = null;
+  public final Map<String, Method> methods = new ConcurrentHashMap<String, Method>();
+  protected static ExecutorService executorService = null;
 
   public CordovaGoogleMaps mapCtrl = null;
   public GoogleMap map = null;
   public PluginMap pluginMap = null;
   protected boolean isRemoved = false;
-  public float density = Resources.getSystem().getDisplayMetrics().density;
+  protected static float density = Resources.getSystem().getDisplayMetrics().density;
   public String CURRENT_PAGE_URL;
 
   public void setPluginMap(PluginMap pluginMap) {
@@ -52,16 +51,20 @@ public class MyPlugin extends CordovaPlugin implements MyPluginInterface {
   @Override
   public void initialize(CordovaInterface cordova, final CordovaWebView webView) {
     super.initialize(cordova, webView);
-    this.objects = new ConcurrentHashMap<String, Object>();
     TAG = this.getServiceName();
     if (executorService == null) {
-      executorService = Executors.newFixedThreadPool(5);
+      cordova.getThreadPool().execute(new Runnable() {
+        @Override
+        public void run() {
+          executorService = Executors.newCachedThreadPool();
+        }
+      });
     }
   }
   @Override
   public boolean execute(final String action, final JSONArray args, final CallbackContext callbackContext)  {
     self = this;
-    executorService.execute(new Runnable() {
+    executorService.submit(new Runnable() {
       @Override
       public void run() {
 
@@ -70,53 +73,60 @@ public class MyPlugin extends CordovaPlugin implements MyPluginInterface {
           return;
         }
 
-        if (methods.size() == 0) {
-          TAG = MyPlugin.this.getServiceName();
-          //Log.d("MyPlugin", "TAG = " + TAG);
-          if (!TAG.contains("-")) {
-            mapCtrl.mPluginLayout.pluginMaps.put(TAG, (PluginMap) MyPlugin.this);
-          } else {
-            PluginEntry pluginEntry = new PluginEntry(TAG, MyPlugin.this);
-            pluginMap.plugins.put(TAG, pluginEntry);
-          }
-
-
-          //CordovaPlugin plugin = mapCtrl.webView.getPluginManager().getPlugin(this.getServiceName());
-          //    Log.d("MyPlugin", "---> this = " + this);
-          //    Log.d("MyPlugin", "---> plugin = " + plugin);
-
-          Method[] classMethods = self.getClass().getMethods();
-          for (Method classMethod : classMethods) {
-            methods.put(classMethod.getName(), classMethod);
-          }
-        }
-        //  this.create(args, callbackContext);
-        //  return true;
-        if (methods.containsKey(action)) {
-          if (self.mapCtrl.mPluginLayout.isDebug) {
-            try {
-              if (args != null && args.length() > 0) {
-                Log.d(TAG, "(debug)action=" + action + " args[0]=" + args.getString(0));
-              } else {
-                Log.d(TAG, "(debug)action=" + action);
+        synchronized (methods) {
+          if (methods.size() == 0) {
+            TAG = MyPlugin.this.getServiceName();
+            if (!TAG.contains("-")) {
+              if (TAG.startsWith("map")) {
+                mapCtrl.mPluginLayout.pluginOverlays.put(TAG, (PluginMap) MyPlugin.this);
+              } else if (TAG.startsWith("streetview")) {
+                mapCtrl.mPluginLayout.pluginOverlays.put(TAG, (PluginStreetViewPanorama) MyPlugin.this);
               }
-            } catch (JSONException e) {
-              e.printStackTrace();
+            } else {
+              PluginEntry pluginEntry = new PluginEntry(TAG, MyPlugin.this);
+              pluginMap.plugins.put(TAG, pluginEntry);
+            }
+
+
+            //CordovaPlugin plugin = mapCtrl.webView.getPluginManager().getPlugin(this.getServiceName());
+            //    Log.d("MyPlugin", "---> this = " + this);
+            //    Log.d("MyPlugin", "---> plugin = " + plugin);
+
+            Method[] classMethods = self.getClass().getMethods();
+            for (Method classMethod : classMethods) {
+              methods.put(classMethod.getName(), classMethod);
             }
           }
-          Method method = methods.get(action);
-          try {
-            if (isRemoved) {
-              // Ignore every execute calls.
-              return;
+
+
+          //  this.create(args, callbackContext);
+          //  return true;
+          if (methods.containsKey(action)) {
+            if (self.mapCtrl.mPluginLayout.isDebug) {
+              try {
+                if (args != null && args.length() > 0) {
+                  Log.d(TAG, "(debug)action=" + action + " args[0]=" + args.getString(0));
+                } else {
+                  Log.d(TAG, "(debug)action=" + action);
+                }
+              } catch (JSONException e) {
+                e.printStackTrace();
+              }
             }
-            method.invoke(self, args, callbackContext);
-          } catch (IllegalAccessException e) {
-            e.printStackTrace();
-            callbackContext.error("Cannot access to the '" + action + "' method.");
-          } catch (InvocationTargetException e) {
-            e.printStackTrace();
-            callbackContext.error("Cannot access to the '" + action + "' method.");
+            Method method = methods.get(action);
+            try {
+              if (isRemoved) {
+                // Ignore every execute calls.
+                return;
+              }
+              method.invoke(self, args, callbackContext);
+            } catch (IllegalAccessException e) {
+              e.printStackTrace();
+              callbackContext.error("Cannot access to the '" + action + "' method.");
+            } catch (InvocationTargetException e) {
+              e.printStackTrace();
+              callbackContext.error("Cannot access to the '" + action + "' method.");
+            }
           }
         }
       }
@@ -125,63 +135,52 @@ public class MyPlugin extends CordovaPlugin implements MyPluginInterface {
 
   }
 
+
   protected void create(final JSONArray args, final CallbackContext callbackContext) throws JSONException {
     // dummy
   }
 
-  protected Circle getCircle(String id) {
-    if (objects == null) {
+  protected synchronized Circle getCircle(String id) {
+    if (!pluginMap.objects.containsKey(id)) {
+      //Log.e(TAG, "---> can not find the circle : " + id);
       return null;
     }
-    if (!this.objects.containsKey(id)) {
-      return null;
-    }
-    return (Circle)this.objects.get(id);
+    return (Circle)pluginMap.objects.get(id);
   }
-  protected GroundOverlay getGroundOverlay(String id) {
-    if (objects == null) {
+  protected synchronized GroundOverlay getGroundOverlay(String id) {
+    if (!pluginMap.objects.containsKey(id)) {
+      //Log.e(TAG, "---> can not find the ground overlay : " + id);
       return null;
     }
-    if (!this.objects.containsKey(id)) {
-      return null;
-    }
-    return (GroundOverlay)this.objects.get(id);
+    return (GroundOverlay)pluginMap.objects.get(id);
   }
-  protected Marker getMarker(String id) {
-    if (objects == null) {
+  protected synchronized Marker getMarker(String id) {
+    if (!pluginMap.objects.containsKey(id)) {
+      //Log.e(TAG, "---> can not find the maker : " + id);
       return null;
     }
-    if (!this.objects.containsKey(id)) {
-      return null;
-    }
-    return (Marker)this.objects.get(id);
+    return (Marker)pluginMap.objects.get(id);
   }
-  protected Polyline getPolyline(String id) {
-    if (objects == null) {
+  protected synchronized Polyline getPolyline(String id) {
+    if (!pluginMap.objects.containsKey(id)) {
+      //Log.e(TAG, "---> can not find the polyline : " + id);
       return null;
     }
-    if (!this.objects.containsKey(id)) {
-      return null;
-    }
-    return (Polyline)this.objects.get(id);
+    return (Polyline)pluginMap.objects.get(id);
   }
-  protected Polygon getPolygon(String id) {
-    if (objects == null) {
+  protected synchronized Polygon getPolygon(String id) {
+    if (!pluginMap.objects.containsKey(id)) {
+      //Log.e(TAG, "---> can not find the polygon : " + id);
       return null;
     }
-    if (!this.objects.containsKey(id)) {
-      return null;
-    }
-    return (Polygon)this.objects.get(id);
+    return (Polygon)pluginMap.objects.get(id);
   }
-  protected TileOverlay getTileOverlay(String id) {
-    if (objects == null) {
+  protected synchronized TileOverlay getTileOverlay(String id) {
+    if (!pluginMap.objects.containsKey(id)) {
+      //Log.e(TAG, "---> can not find the tileoverlay : " + id);
       return null;
     }
-    if (!this.objects.containsKey(id)) {
-      return null;
-    }
-    return (TileOverlay)this.objects.get(id);
+    return (TileOverlay)pluginMap.objects.get(id);
   }
 
   protected void setInt(String methodName, String id, int value, final CallbackContext callbackContext) throws JSONException {
@@ -202,10 +201,10 @@ public class MyPlugin extends CordovaPlugin implements MyPluginInterface {
   }
 
   private void setValue(String methodName, Class<?> methodClass, String id, final Object value, final CallbackContext callbackContext) throws JSONException {
-    if (!this.objects.containsKey(id)) {
+    if (!pluginMap.objects.containsKey(id)) {
       return;
     }
-    final Object object = this.objects.get(id);
+    final Object object = pluginMap.objects.get(id);
     try {
       final Method method = object.getClass().getDeclaredMethod(methodName, methodClass);
       cordova.getActivity().runOnUiThread(new Runnable() {
@@ -213,7 +212,7 @@ public class MyPlugin extends CordovaPlugin implements MyPluginInterface {
         public void run() {
           try {
             method.invoke(object, value);
-            sendNoResult(callbackContext);
+            callbackContext.success();
           } catch (Exception e) {
             e.printStackTrace();
             callbackContext.error(e.getMessage());
@@ -226,19 +225,13 @@ public class MyPlugin extends CordovaPlugin implements MyPluginInterface {
     }
   }
   protected void clear() {
-    String[] keys = objects.keySet().toArray(new String[objects.size()]);
+    String[] keys = pluginMap.objects.keys.toArray(new String[pluginMap.objects.size()]);
     Object object;
     for (String key : keys) {
-      object = objects.remove(key);
+      object = pluginMap.objects.remove(key);
       object = null;
     }
-    this.objects.clear();
-  }
-
-  protected void sendNoResult(CallbackContext callbackContext) {
-    PluginResult pluginResult = new PluginResult(PluginResult.Status.NO_RESULT);
-    pluginResult.setKeepCallback(true);
-    callbackContext.sendPluginResult(pluginResult);
+    pluginMap.objects.clear();
   }
 
 

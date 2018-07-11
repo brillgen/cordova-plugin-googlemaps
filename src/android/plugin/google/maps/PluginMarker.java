@@ -1,10 +1,12 @@
 package plugin.google.maps;
 
-import android.content.res.AssetManager;
 import android.graphics.Bitmap;
-import android.graphics.BitmapFactory;
+import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.Paint;
 import android.graphics.Point;
+import android.graphics.Rect;
+import android.graphics.Typeface;
 import android.os.AsyncTask;
 import android.os.Bundle;
 import android.os.Handler;
@@ -23,15 +25,11 @@ import com.google.android.gms.maps.model.MarkerOptions;
 
 import org.apache.cordova.CallbackContext;
 import org.apache.cordova.CordovaInterface;
-import org.apache.cordova.CordovaResourceApi;
 import org.apache.cordova.CordovaWebView;
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
-import java.io.File;
-import java.io.IOException;
-import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Locale;
@@ -44,9 +42,17 @@ public class PluginMarker extends MyPlugin implements MyPluginInterface  {
     BOUNCE
   }
 
-  private ArrayList<AsyncTask> iconLoadingTasks = new ArrayList<AsyncTask>();
-  private ArrayList<Bitmap> icons = new ArrayList<Bitmap>();
-  private HashMap<String, Integer> iconCacheKeys = new HashMap<String, Integer>();
+  protected HashMap<Integer, AsyncTask> iconLoadingTasks = new HashMap<Integer, AsyncTask>();
+  protected HashMap<String, Bitmap> icons = new HashMap<String, Bitmap>();
+  protected final HashMap<String, Integer> iconCacheKeys = new HashMap<String, Integer>();
+  private static final Paint paint = new Paint();
+  private final HashMap<String, Integer> semaphoreAsync = new HashMap<String, Integer>();
+  private boolean _clearDone = false;
+
+  protected interface ICreateMarkerCallback {
+    void onSuccess(Marker marker);
+    void onError(String message);
+  }
 
   @Override
   public void initialize(CordovaInterface cordova, final CordovaWebView webView) {
@@ -60,30 +66,26 @@ public class PluginMarker extends MyPlugin implements MyPluginInterface  {
     cordova.getActivity().runOnUiThread(new Runnable() {
       @Override
       public void run() {
-        if (objects == null) {
-          return;
-        }
-        Set<String> keySet = objects.keySet();
+        Set<String> keySet = pluginMap.objects.keys;
         String[] objectIdArray = keySet.toArray(new String[keySet.size()]);
 
         for (String objectId : objectIdArray) {
-          if (objects.containsKey(objectId)) {
+          if (pluginMap.objects.containsKey(objectId)) {
             if (objectId.startsWith("marker_") &&
                 !objectId.startsWith("marker_property_") &&
+                !objectId.startsWith("marker_imageSize_") &&
                 !objectId.startsWith("marker_icon_")) {
-              Marker marker = (Marker) objects.remove(objectId);
-              marker.setIcon(null);
-              marker.remove();
+              Marker marker = (Marker) pluginMap.objects.remove(objectId);
+              _removeMarker(marker);
               marker = null;
             } else {
-              Object object = objects.remove(objectId);
+              Object object = pluginMap.objects.remove(objectId);
               object = null;
             }
           }
         }
 
-        objects.clear();
-        objects = null;
+        pluginMap.objects.clear();
       }
     });
 
@@ -91,76 +93,95 @@ public class PluginMarker extends MyPlugin implements MyPluginInterface  {
 
   @Override
   protected void clear() {
-    //--------------------------------------
-    // Cancel tasks
-    //--------------------------------------
-    cordova.getThreadPool().submit(new Runnable() {
-      @Override
-      public void run() {
-        AsyncTask task;
-        int i, ilen=iconLoadingTasks.size();
-        for (i = 0; i < ilen; i++) {
-          task = iconLoadingTasks.remove(i);
-          task.cancel(true);
-          task = null;
-        }
-        iconLoadingTasks = null;
-      }
-    });
+    synchronized (semaphoreAsync) {
+      _clearDone = false;
 
-    //--------------------------------------
-    // Recycle bitmaps as much as possible
-    //--------------------------------------
-    String[] cacheKeys = iconCacheKeys.keySet().toArray(new String[iconCacheKeys.size()]);
-    for (int i = 0; i < cacheKeys.length; i++) {
-      AsyncLoadImage.removeBitmapFromMemCahce(cacheKeys[i]);
-      iconCacheKeys.remove(cacheKeys[i]);
-    }
-    cacheKeys = null;
-    Bitmap[] cachedBitmaps = icons.toArray(new Bitmap[icons.size()]);
-    Bitmap image;
-    for (int i = 0; i < cachedBitmaps.length; i++) {
-      image = icons.remove(0);
-      if (image != null && !image.isRecycled()) {
-        image.recycle();
-      }
-      image = null;
-    }
-    icons.clear();
-
-    //--------------------------------------
-    // clean up properties as much as possible
-    //--------------------------------------
-    cordova.getActivity().runOnUiThread(new Runnable() {
-      @Override
-      public void run() {
-        if (objects == null) {
-          return;
-        }
-        Set<String> keySet = objects.keySet();
-        String[] objectIdArray = keySet.toArray(new String[keySet.size()]);
-
-        for (String objectId : objectIdArray) {
-          if (objects.containsKey(objectId)) {
-            if (objectId.startsWith("marker_") &&
-                !objectId.startsWith("marker_property_") &&
-                !objectId.startsWith("marker_icon_")) {
-              Marker marker = (Marker) objects.remove(objectId);
-              marker.setIcon(null);
-              marker.remove();
-              marker = null;
-            } else {
-              Object object = objects.remove(objectId);
-              object = null;
+      cordova.getThreadPool().submit(new Runnable() {
+        @Override
+        public void run() {
+          //--------------------------------------
+          // Cancel tasks
+          //--------------------------------------
+          AsyncTask task;
+          if (iconLoadingTasks != null && iconLoadingTasks.size() > 0) {
+            int i, ilen = iconLoadingTasks.size();
+            for (i = 0; i < ilen; i++) {
+              task = iconLoadingTasks.get(i);
+              task.cancel(true);
             }
           }
         }
+      });
 
-        objects.clear();
-        PluginMarker.super.clear();
 
+      //--------------------------------------
+      // Recycle bitmaps as much as possible
+      //--------------------------------------
+      if (iconCacheKeys != null) {
+        String[] cacheKeys = iconCacheKeys.keySet().toArray(new String[iconCacheKeys.size()]);
+        for (int i = 0; i < cacheKeys.length; i++) {
+          AsyncLoadImage.removeBitmapFromMemCahce(cacheKeys[i]);
+          iconCacheKeys.remove(cacheKeys[i]);
+        }
+        cacheKeys = null;
       }
-    });
+      if (icons != null) {
+        String[] keys = icons.keySet().toArray(new String[icons.size()]);
+        //Bitmap[] cachedBitmaps = icons.toArray(new Bitmap[icons.size()]);
+        Bitmap image;
+        for (int i = 0; i < keys.length; i++) {
+          image = icons.remove(keys[i]);
+          if (image != null && !image.isRecycled()) {
+            image.recycle();
+          }
+          image = null;
+        }
+        icons.clear();
+      }
+
+      //--------------------------------------
+      // clean up properties as much as possible
+      //--------------------------------------
+      cordova.getActivity().runOnUiThread(new Runnable() {
+        @Override
+        public void run() {
+          Set<String> keySet = pluginMap.objects.keys;
+          String[] objectIdArray = keySet.toArray(new String[keySet.size()]);
+
+          for (String objectId : objectIdArray) {
+            if (pluginMap.objects.containsKey(objectId)) {
+              if (objectId.startsWith("marker_") &&
+                  !objectId.startsWith("marker_property_") &&
+                  !objectId.startsWith("marker_imageSize") &&
+                  !objectId.startsWith("marker_icon_")) {
+                Marker marker = (Marker) pluginMap.objects.remove(objectId);
+                marker.setTag(null);
+                marker.remove();
+                marker = null;
+              } else {
+                Object object = pluginMap.objects.remove(objectId);
+                object = null;
+              }
+            }
+          }
+
+          synchronized (semaphoreAsync) {
+            _clearDone = true;
+            semaphoreAsync.notify();
+          }
+
+        }
+      });
+
+      try {
+        if (!_clearDone) {
+          semaphoreAsync.wait(1000);
+        }
+      } catch (InterruptedException e) {
+        // ignore
+        //e.printStackTrace();
+      }
+    }
 
   }
 
@@ -174,19 +195,54 @@ public class PluginMarker extends MyPlugin implements MyPluginInterface  {
   public void create(final JSONArray args, final CallbackContext callbackContext) throws JSONException {
 
     // Create an instance of Marker class
-    final MarkerOptions markerOptions = new MarkerOptions();
-    final JSONObject properties = new JSONObject();
 
-    final JSONObject opts = args.getJSONObject(1);
+    JSONObject opts = args.getJSONObject(1);
+    final String markerId = "marker_" + args.getString(2);
+    final JSONObject result = new JSONObject();
+    result.put("id", markerId);
+
+    _create(markerId, opts, new ICreateMarkerCallback() {
+      @Override
+      public void onSuccess(Marker marker) {
+        if (icons.containsKey(markerId)) {
+          Bitmap icon = icons.get(markerId);
+          try {
+            result.put("width", icon.getWidth() / density);
+            result.put("height", icon.getHeight() / density);
+          } catch (Exception e) {
+            e.printStackTrace();
+          }
+        } else {
+          try {
+            result.put("width", 24);
+            result.put("height", 42);
+          } catch (Exception e) {
+            e.printStackTrace();
+          }
+        }
+
+        callbackContext.success(result);
+      }
+
+      @Override
+      public void onError(String message) {
+        callbackContext.error(message);
+      }
+    });
+  }
+
+  protected void _create(final String markerId, final JSONObject opts, final ICreateMarkerCallback callback) throws JSONException {
+    final JSONObject properties = new JSONObject();
+    final MarkerOptions markerOptions = new MarkerOptions();
     if (opts.has("position")) {
-        JSONObject position = opts.getJSONObject("position");
-        markerOptions.position(new LatLng(position.getDouble("lat"), position.getDouble("lng")));
+      JSONObject position = opts.getJSONObject("position");
+      markerOptions.position(new LatLng(position.getDouble("lat"), position.getDouble("lng")));
     }
     if (opts.has("title")) {
-        markerOptions.title(opts.getString("title"));
+      markerOptions.title(opts.getString("title"));
     }
     if (opts.has("snippet")) {
-        markerOptions.snippet(opts.getString("snippet"));
+      markerOptions.snippet(opts.getString("snippet"));
     }
     if (opts.has("visible")) {
       if (opts.has("icon") && !"".equals(opts.getString("icon"))) {
@@ -196,12 +252,14 @@ public class PluginMarker extends MyPlugin implements MyPluginInterface  {
         markerOptions.visible(opts.getBoolean("visible"));
         properties.put("isVisible", markerOptions.isVisible());
       }
+    } else {
+      markerOptions.visible(true);
     }
     if (opts.has("draggable")) {
       markerOptions.draggable(opts.getBoolean("draggable"));
     }
     if (opts.has("rotation")) {
-      markerOptions.rotation((float)opts.getDouble("rotation"));
+      markerOptions.rotation((float) opts.getDouble("rotation"));
     }
     if (opts.has("flat")) {
       markerOptions.flat(opts.getBoolean("flat"));
@@ -236,6 +294,7 @@ public class PluginMarker extends MyPlugin implements MyPluginInterface  {
       @Override
       public void run() {
         final Marker marker = map.addMarker(markerOptions);
+        marker.setTag(markerId);
         marker.hideInfoWindow();
 
         cordova.getThreadPool().execute(new Runnable() {
@@ -244,16 +303,15 @@ public class PluginMarker extends MyPlugin implements MyPluginInterface  {
 
             try {
               // Store the marker
-              String id = "marker_" + marker.getId();
-              self.objects.put(id, marker);
+              synchronized (pluginMap.objects) {
+                pluginMap.objects.put(markerId, marker);
 
-              self.objects.put("marker_property_" + marker.getId(), properties);
+                pluginMap.objects.put("marker_property_" + markerId, properties);
+              }
 
               // Prepare the result
               final JSONObject result = new JSONObject();
-              result.put("hashCode", marker.hashCode());
-              result.put("id", id);
-
+              result.put("id", markerId);
 
               // Load icon
               if (opts.has("icon")) {
@@ -264,33 +322,61 @@ public class PluginMarker extends MyPlugin implements MyPluginInterface  {
                 Object value = opts.get("icon");
                 if (JSONObject.class.isInstance(value)) {
                   JSONObject iconProperty = (JSONObject) value;
-                  bundle = PluginUtil.Json2Bundle(iconProperty);
+                  if (iconProperty.has("url") && JSONArray.class.isInstance(iconProperty.get("url"))) {
 
-                  // The `anchor` of the `icon` property
-                  if (iconProperty.has("anchor")) {
-                    value = iconProperty.get("anchor");
-                    if (JSONArray.class.isInstance(value)) {
-                      JSONArray points = (JSONArray) value;
-                      double[] anchorPoints = new double[points.length()];
-                      for (int i = 0; i < points.length(); i++) {
-                        anchorPoints[i] = points.getDouble(i);
+                    float[] hsv = new float[3];
+                    JSONArray arrayRGBA = iconProperty.getJSONArray("url");
+                    Color.RGBToHSV(arrayRGBA.getInt(0), arrayRGBA.getInt(1), arrayRGBA.getInt(2), hsv);
+                    bundle = new Bundle();
+                    bundle.putFloat("iconHue", hsv[0]);
+
+                  } else {
+                    if (iconProperty.has("label")) {
+                      JSONObject label = iconProperty.getJSONObject("label");
+                      if (label != null && label.get("color") instanceof JSONArray) {
+                        label.put("color", PluginUtil.parsePluginColor(label.getJSONArray("color")));
+                        iconProperty.put("label", label);
                       }
-                      bundle.putDoubleArray("anchor", anchorPoints);
+                    }
+                    bundle = PluginUtil.Json2Bundle(iconProperty);
+
+                    // The `anchor` of the `icon` property
+                    if (iconProperty.has("anchor")) {
+                      value = iconProperty.get("anchor");
+                      if (JSONArray.class.isInstance(value)) {
+                        JSONArray points = (JSONArray) value;
+                        double[] anchorPoints = new double[points.length()];
+                        for (int i = 0; i < points.length(); i++) {
+                          anchorPoints[i] = points.getDouble(i);
+                        }
+                        bundle.putDoubleArray("anchor", anchorPoints);
+                      } else if (value instanceof JSONObject && ((JSONObject) value).has("x") && ((JSONObject) value).has("y")) {
+                        double[] anchorPoints = new double[2];
+                        anchorPoints[0] = ((JSONObject) value).getDouble("x");
+                        anchorPoints[1] = ((JSONObject) value).getDouble("y");
+                        bundle.putDoubleArray("anchor", anchorPoints);
+                      }
+                    }
+
+                    // The `infoWindowAnchor` property for infowindow
+                    if (opts.has("infoWindowAnchor")) {
+                      value = opts.get("infoWindowAnchor");
+                      if (JSONArray.class.isInstance(value)) {
+                        JSONArray points = (JSONArray) value;
+                        double[] anchorPoints = new double[points.length()];
+                        for (int i = 0; i < points.length(); i++) {
+                          anchorPoints[i] = points.getDouble(i);
+                        }
+                        bundle.putDoubleArray("infoWindowAnchor", anchorPoints);
+                      } else if (value instanceof JSONObject && ((JSONObject) value).has("x") && ((JSONObject) value).has("y")) {
+                        double[] anchorPoints = new double[2];
+                        anchorPoints[0] = ((JSONObject) value).getDouble("x");
+                        anchorPoints[1] = ((JSONObject) value).getDouble("y");
+                        bundle.putDoubleArray("infoWindowAnchor", anchorPoints);
+                      }
                     }
                   }
 
-                  // The `infoWindowAnchor` property for infowindow
-                  if (opts.has("infoWindowAnchor")) {
-                    value = opts.get("infoWindowAnchor");
-                    if (JSONArray.class.isInstance(value)) {
-                      JSONArray points = (JSONArray) value;
-                      double[] anchorPoints = new double[points.length()];
-                      for (int i = 0; i < points.length(); i++) {
-                        anchorPoints[i] = points.getDouble(i);
-                      }
-                      bundle.putDoubleArray("infoWindowAnchor", anchorPoints);
-                    }
-                  }
                 } else if (JSONArray.class.isInstance(value)) {
                   float[] hsv = new float[3];
                   JSONArray arrayRGBA = (JSONArray) value;
@@ -339,16 +425,16 @@ public class PluginMarker extends MyPlugin implements MyPluginInterface  {
                             @Override
                             public void onPostExecute(Object object) {
                               Marker marker = (Marker) object;
-                              callbackContext.success(result);
+                              callback.onSuccess(marker);
                             }
 
                             @Override
                             public void onError(String errorMsg) {
-                              callbackContext.error(errorMsg);
+                              callback.onError(errorMsg);
                             }
                           });
                         } else {
-                          callbackContext.success(result);
+                          callback.onSuccess(marker);
                         }
                       }
                     });
@@ -356,7 +442,7 @@ public class PluginMarker extends MyPlugin implements MyPluginInterface  {
 
                   @Override
                   public void onError(String errorMsg) {
-                    callbackContext.error(errorMsg);
+                    callback.onError(errorMsg);
                   }
 
                 });
@@ -374,30 +460,28 @@ public class PluginMarker extends MyPlugin implements MyPluginInterface  {
 
                     @Override
                     public void onPostExecute(Object object) {
-                      callbackContext.success(result);
+                      callback.onSuccess(marker);
                     }
 
                     @Override
                     public void onError(String errorMsg) {
-                      callbackContext.error(errorMsg);
+                      callback.onError(errorMsg);
                     }
 
                   });
                 } else {
                   // Return the result if does not specify the icon property.
-                  callbackContext.success(result);
+                  callback.onSuccess(marker);
                 }
               }
             } catch (Exception e) {
               e.printStackTrace();
-              callbackContext.error("" + e.getMessage());
+              callback.onError("" + e.getMessage());
             }
           }
         });
       }
     });
-
-
 
   }
 
@@ -494,35 +578,19 @@ public class PluginMarker extends MyPlugin implements MyPluginInterface  {
       return;
     }
     switch(animation) {
-    case DROP:
-      this.setDropAnimation_(marker, callback);
-      break;
+      case DROP:
+        this.setDropAnimation_(marker, callback);
+        break;
 
-    case BOUNCE:
-      this.setBounceAnimation_(marker, callback);
-      break;
+      case BOUNCE:
+        this.setBounceAnimation_(marker, callback);
+        break;
 
-    default:
-      break;
+      default:
+        break;
     }
   }
 
-
-  public void setActiveMarkerId(final JSONArray args, final CallbackContext callbackContext) throws JSONException {
-    final String id = args.getString(0);
-
-    cordova.getActivity().runOnUiThread(new Runnable() {
-      @Override
-      public void run() {
-        Marker marker = (Marker) objects.get(id);
-        if (marker == null) {
-          return;
-        }
-        pluginMap.activeMarker = marker;
-      }
-    });
-  }
-  
   /**
    *
    * http://android-er.blogspot.com/2013/01/implement-bouncing-marker-for-google.html
@@ -534,6 +602,11 @@ public class PluginMarker extends MyPlugin implements MyPluginInterface  {
     String markerId = args.getString(0);
     String animation = args.getString(1);
     final Marker marker = this.getMarker(markerId);
+    Log.d(TAG, "--->setAnimation: markerId = " + markerId + ", animation = " + animation);
+    if (marker == null) {
+      callbackContext.error("marker is null");
+      return;
+    }
 
     this.setMarkerAnimation_(marker, animation, new PluginAsyncInterface() {
 
@@ -564,7 +637,7 @@ public class PluginMarker extends MyPlugin implements MyPluginInterface  {
         if (marker != null) {
           marker.showInfoWindow();
         }
-        sendNoResult(callbackContext);
+        callbackContext.success();
       }
     });
   }
@@ -622,7 +695,7 @@ public class PluginMarker extends MyPlugin implements MyPluginInterface  {
         if (marker != null) {
           marker.setPosition(position);
         }
-        sendNoResult(callbackContext);
+        callbackContext.success();
       }
     });
   }
@@ -651,18 +724,18 @@ public class PluginMarker extends MyPlugin implements MyPluginInterface  {
 
     Marker marker = this.getMarker(id);
     if (marker == null) {
-      this.sendNoResult(callbackContext);
+      callbackContext.success();
       return;
     }
-    String propertyId = "marker_property_" + marker.getId();
+    String propertyId = "marker_property_" + id;
     JSONObject properties = null;
-    if (self.objects.containsKey(propertyId)) {
-      properties = (JSONObject)self.objects.get(propertyId);
+    if (self.pluginMap.objects.containsKey(propertyId)) {
+      properties = (JSONObject)self.pluginMap.objects.get(propertyId);
     } else {
       properties = new JSONObject();
     }
     properties.put("isVisible", isVisible);
-    self.objects.put(propertyId, properties);
+    self.pluginMap.objects.put(propertyId, properties);
 
     this.setBoolean("setVisible", id, isVisible, callbackContext);
   }
@@ -676,19 +749,19 @@ public class PluginMarker extends MyPlugin implements MyPluginInterface  {
     String id = args.getString(0);
     Marker marker = this.getMarker(id);
     if (marker == null) {
-      this.sendNoResult(callbackContext);
+      callbackContext.success();
       return;
     }
-    String propertyId = "marker_property_" + marker.getId();
+    String propertyId = "marker_property_" + id;
     JSONObject properties = null;
-    if (self.objects.containsKey(propertyId)) {
-      properties = (JSONObject)self.objects.get(propertyId);
+    if (self.pluginMap.objects.containsKey(propertyId)) {
+      properties = (JSONObject)self.pluginMap.objects.get(propertyId);
     } else {
       properties = new JSONObject();
     }
     properties.put("disableAutoPan", disableAutoPan);
-    self.objects.put(propertyId, properties);
-    this.sendNoResult(callbackContext);
+    self.pluginMap.objects.put(propertyId, properties);
+    callbackContext.success();
   }
   /**
    * Set title for the marker
@@ -729,7 +802,7 @@ public class PluginMarker extends MyPlugin implements MyPluginInterface  {
         if (marker != null) {
           marker.hideInfoWindow();
         }
-        sendNoResult(callbackContext);
+        callbackContext.success();
       }
     });
   }
@@ -756,35 +829,48 @@ public class PluginMarker extends MyPlugin implements MyPluginInterface  {
     */
 
     String propertyId = "marker_property_" + id;
-    objects.remove(propertyId);
+    pluginMap.objects.remove(propertyId);
 
     cordova.getActivity().runOnUiThread(new Runnable() {
       @Override
       public void run() {
-        marker.remove();
-        if (objects != null) {
-          objects.remove(id);
-        }
-        String iconCacheKey = "marker_icon_" + marker.getId();
-        if (objects.containsKey(iconCacheKey)) {
-          String cacheKey = (String) objects.remove(iconCacheKey);
-          if (iconCacheKeys.containsKey(cacheKey)) {
-            int count = iconCacheKeys.get(cacheKey);
-            count--;
-            if (count < 1) {
-              // gc
-              AsyncLoadImage.removeBitmapFromMemCahce(cacheKey);
-              iconCacheKeys.remove(cacheKey);
-            } else {
-              iconCacheKeys.put(cacheKey, count);
-            }
-          }
-          objects.remove(iconCacheKey);
-        }
 
-        sendNoResult(callbackContext);
+        pluginMap.objects.remove(id);
+        _removeMarker(marker);
+
+        callbackContext.success();
       }
     });
+  }
+  protected void _removeMarker(Marker marker) {
+    if (marker == null || marker.getTag() == null) {
+      return;
+    }
+    //---------------------------------------------
+    // Removes marker safely
+    // (prevent the `un-managed object exception`)
+    //---------------------------------------------
+    String iconCacheKey = "marker_icon_" + marker.getTag();
+    marker.setTag(null);
+    marker.remove();
+
+    //---------------------------------------------------------------------------------
+    // If no marker uses the icon image used be specified this marker, release it
+    //---------------------------------------------------------------------------------
+    if (pluginMap.objects.containsKey(iconCacheKey)) {
+      String cacheKey = (String) pluginMap.objects.remove(iconCacheKey);
+      if (iconCacheKeys.containsKey(cacheKey)) {
+        int count = iconCacheKeys.get(cacheKey);
+        count--;
+        if (count < 1) {
+          AsyncLoadImage.removeBitmapFromMemCahce(cacheKey);
+          iconCacheKeys.remove(cacheKey);
+        } else {
+          iconCacheKeys.put(cacheKey, count);
+        }
+      }
+      pluginMap.objects.remove(iconCacheKey);
+    }
   }
 
   /**
@@ -799,11 +885,11 @@ public class PluginMarker extends MyPlugin implements MyPluginInterface  {
     String id = args.getString(0);
     Marker marker = this.getMarker(id);
 
-    Bundle imageSize = (Bundle) self.objects.get("imageSize");
+    Bundle imageSize = (Bundle) self.pluginMap.objects.get("marker_imageSize_" + id);
     if (imageSize != null) {
       this._setIconAnchor(marker, anchorX, anchorY, imageSize.getInt("width"), imageSize.getInt("height"));
     }
-    this.sendNoResult(callbackContext);
+    callbackContext.success();
   }
 
 
@@ -819,11 +905,11 @@ public class PluginMarker extends MyPlugin implements MyPluginInterface  {
     String id = args.getString(0);
     Marker marker = this.getMarker(id);
 
-    Bundle imageSize = (Bundle) self.objects.get("imageSize");
+    Bundle imageSize = (Bundle) self.pluginMap.objects.get("marker_imageSize_" + id);
     if (imageSize != null) {
       this._setInfoWindowAnchor(marker, anchorX, anchorY, imageSize.getInt("width"), imageSize.getInt("height"));
     }
-    this.sendNoResult(callbackContext);
+    callbackContext.success();
   }
 
   /**
@@ -863,6 +949,11 @@ public class PluginMarker extends MyPlugin implements MyPluginInterface  {
             anchorPoints[i] = points.getDouble(i);
           }
           bundle.putDoubleArray("anchor", anchorPoints);
+        } else if (value instanceof JSONObject && ((JSONObject) value).has("x") && ((JSONObject) value).has("y")) {
+          double[] anchorPoints = new double[2];
+          anchorPoints[0] = ((JSONObject) value).getDouble("x");
+          anchorPoints[1] = ((JSONObject) value).getDouble("y");
+          bundle.putDoubleArray("anchor", anchorPoints);
         }
       }
     } else if (JSONArray.class.isInstance(value)) {
@@ -880,7 +971,7 @@ public class PluginMarker extends MyPlugin implements MyPluginInterface  {
 
         @Override
         public void onPostExecute(Object object) {
-          PluginMarker.this.sendNoResult(callbackContext);
+          callbackContext.success();
         }
 
         @Override
@@ -889,11 +980,11 @@ public class PluginMarker extends MyPlugin implements MyPluginInterface  {
         }
       });
     } else {
-      this.sendNoResult(callbackContext);
+      callbackContext.success();
     }
   }
 
-  private void setIcon_(final Marker marker, final Bundle iconProperty, final PluginAsyncInterface callback) {
+  protected void setIcon_(final Marker marker, final Bundle iconProperty, final PluginAsyncInterface callback) {
     boolean noCaching = false;
     if (iconProperty.containsKey("noCache")) {
       noCaching = iconProperty.getBoolean("noCache");
@@ -907,6 +998,7 @@ public class PluginMarker extends MyPlugin implements MyPluginInterface  {
         }
       });
       callback.onPostExecute(marker);
+      return;
     }
 
     String iconUrl = iconProperty.getString("url");
@@ -915,277 +1007,152 @@ public class PluginMarker extends MyPlugin implements MyPluginInterface  {
       return;
     }
 
-    if (!iconUrl.contains("://") &&
-      !iconUrl.startsWith("/") &&
-      !iconUrl.startsWith("www/") &&
-      !iconUrl.startsWith("data:image") &&
-        !iconUrl.startsWith("./") &&
-        !iconUrl.startsWith("../")) {
-      iconUrl = "./" + iconUrl;
-    }
-    if (iconUrl.startsWith("./")  || iconUrl.startsWith("../")) {
-      iconUrl = iconUrl.replace("././", "./");
-      String currentPage = CURRENT_PAGE_URL;
-      currentPage = currentPage.replaceAll("[^\\/]*$", "");
-      iconUrl = currentPage + "/" + iconUrl;
+    int width = -1;
+    int height = -1;
+    if (iconProperty.containsKey("size")) {
+      Bundle sizeInfo = (Bundle) iconProperty.get("size");
+      width = sizeInfo.getInt("width", width);
+      height = sizeInfo.getInt("height", height);
     }
 
-    if (iconUrl == null) {
-      callback.onPostExecute(marker);
-      return;
-    }
 
-    iconProperty.putString("url", iconUrl);
+    final AsyncLoadImage.AsyncLoadImageOptions options = new AsyncLoadImage.AsyncLoadImageOptions();
+    options.url = iconUrl;
+    options.width = width;
+    options.height = height;
+    options.noCaching = noCaching;
+    final int taskId = options.hashCode();
 
-    if (iconUrl.indexOf("http") != 0) {
-      //----------------------------------
-      // Load icon from local file
-      //----------------------------------
-      AsyncTask<Void, Void, Bitmap> task = new AsyncTask<Void, Void, Bitmap>() {
+    AsyncLoadImageInterface onComplete = new AsyncLoadImageInterface() {
+      @Override
+      public void onPostExecute(AsyncLoadImage.AsyncLoadImageResult result) {
+        iconLoadingTasks.remove(taskId);
 
-        @Override
-        protected Bitmap doInBackground(Void... params) {
-          String iconUrl = iconProperty.getString("url");
-          if (iconUrl == null) {
-            return null;
-          }
-
-          Bitmap image = null;
-          if (iconUrl.indexOf("cdvfile://") == 0) {
-            CordovaResourceApi resourceApi = webView.getResourceApi();
-            iconUrl = PluginUtil.getAbsolutePathFromCDVFilePath(resourceApi, iconUrl);
-          }
-          if (iconUrl == null) {
-            return null;
-          }
-
-          if (iconUrl.indexOf("data:image/") == 0 && iconUrl.contains(";base64,")) {
-            String[] tmp = iconUrl.split(",");
-            image = PluginUtil.getBitmapFromBase64encodedImage(tmp[1]);
-          } else if (iconUrl.indexOf("file://") == 0 &&
-              !iconUrl.contains("file:///android_asset/")) {
-            iconUrl = iconUrl.replace("file://", "");
-            File tmp = new File(iconUrl);
-            if (tmp.exists()) {
-              image = BitmapFactory.decodeFile(iconUrl);
-            } else {
-              //if (PluginMarker.this.mapCtrl.mPluginLayout.isDebug) {
-                Log.w("GoogleMaps", "icon is not found (" + iconUrl + ")");
-              //}
-            }
-          } else {
-            //Log.d(TAG, "iconUrl = " + iconUrl);
-            if (iconUrl.indexOf("file:///android_asset/") == 0) {
-              iconUrl = iconUrl.replace("file:///android_asset/", "");
-            }
-            //Log.d(TAG, "iconUrl = " + iconUrl);
-            if (iconUrl.contains("./")) {
-              try {
-                boolean isAbsolutePath = iconUrl.startsWith("/");
-                File relativePath = new File(iconUrl);
-                iconUrl = relativePath.getCanonicalPath();
-                //Log.d(TAG, "iconUrl = " + iconUrl);
-                if (!isAbsolutePath) {
-                  iconUrl = iconUrl.substring(1);
-                }
-                //Log.d(TAG, "iconUrl = " + iconUrl);
-              } catch (Exception e) {
-                e.printStackTrace();
-              }
-            }
-            AssetManager assetManager = PluginMarker.this.cordova.getActivity().getAssets();
-            InputStream inputStream;
-            try {
-              inputStream = assetManager.open(iconUrl);
-              image = BitmapFactory.decodeStream(inputStream);
-              inputStream.close();
-            } catch (IOException e) {
-              e.printStackTrace();
-              return null;
-            }
-          }
-          if (image == null) {
-            return null;
-          }
-          icons.add(image);
-
-          Boolean isResized = false;
-          if (iconProperty.containsKey("size")) {
-            Object size = iconProperty.get("size");
-
-            if (Bundle.class.isInstance(size)) {
-
-              Bundle sizeInfo = (Bundle)size;
-              int width = sizeInfo.getInt("width", 0);
-              int height = sizeInfo.getInt("height", 0);
-              if (width > 0 && height > 0) {
-                isResized = true;
-                width = (int)Math.round(width * PluginMarker.this.density);
-                height = (int)Math.round(height * PluginMarker.this.density);
-                image = PluginUtil.resizeBitmap(image, width, height);
-              }
-            }
-          }
-
-          if (!isResized) {
-            image = PluginUtil.scaleBitmapForDevice(image);
-          }
-          icons.add(image);
-
-          return image;
+        if (result == null || result.image == null) {
+          callback.onPostExecute(marker);
+          return;
+        }
+        if (marker == null) {
+          callback.onError("marker is removed");
+          return;
+        }
+        if (result.image.isRecycled()) {
+          //Maybe the task was canceled by map.clean()?
+          callback.onError("Can not get image for marker. Maybe the task was canceled by map.clean()?");
+          return;
         }
 
-        @Override
-        protected void onPostExecute(Bitmap image) {
-          if (image == null) {
-            callback.onPostExecute(marker);
-            return;
-          }
-          if (image.isRecycled()) {
-            //Maybe the task was canceled by map.clean()?
-            callback.onError("Can not get image for marker. Maybe the task was canceled by map.clean()?");
-            return;
+        synchronized (marker) {
+          String markerTag = marker.getTag() + "";
+          String markerIconTag = "marker_icon_" + markerTag;
+          String markerImgSizeTag = "marker_imageSize_" + markerTag;
+
+          String currentCacheKey = (String) pluginMap.objects.get(markerIconTag);
+          if (result.cacheKey != null && result.cacheKey.equals(currentCacheKey)) {
+            synchronized (iconCacheKeys) {
+              if (iconCacheKeys.containsKey(currentCacheKey)) {
+                int count = iconCacheKeys.get(currentCacheKey);
+                count--;
+                if (count < 1) {
+                  AsyncLoadImage.removeBitmapFromMemCahce(currentCacheKey);
+                  iconCacheKeys.remove(currentCacheKey);
+                } else {
+                  iconCacheKeys.put(currentCacheKey, count);
+                }
+              }
+            }
           }
 
-          try {
-            BitmapDescriptor bitmapDescriptor = BitmapDescriptorFactory.fromBitmap(image);
-            if (bitmapDescriptor == null) {
+          if (icons.containsKey(markerIconTag)) {
+            Bitmap icon = icons.remove(markerIconTag);
+            if (icon != null && !icon.isRecycled()) {
+              icon.recycle();
+            }
+            icon = null;
+          }
+          icons.put(markerTag, result.image);
+
+          //-------------------------------------------------------
+          // Counts up the markers that use the same icon image.
+          //-------------------------------------------------------
+          if (result.cacheHit) {
+            if (marker == null || marker.getTag() == null) {
               callback.onPostExecute(marker);
               return;
             }
-            marker.setIcon(bitmapDescriptor);
-
-            // Save the information for the anchor property
-            Bundle imageSize = new Bundle();
-            imageSize.putInt("width", image.getWidth());
-            imageSize.putInt("height", image.getHeight());
-            self.objects.put("imageSize", imageSize);
-
-
-            // The `anchor` of the `icon` property
-            if (iconProperty.containsKey("anchor")) {
-              double[] anchor = iconProperty.getDoubleArray("anchor");
-              if (anchor.length == 2) {
-                _setIconAnchor(marker, anchor[0], anchor[1], imageSize.getInt("width"), imageSize.getInt("height"));
-              }
+            String hitCountKey = markerIconTag;
+            pluginMap.objects.put(hitCountKey, result.cacheKey);
+            if (!iconCacheKeys.containsKey(result.cacheKey)) {
+              iconCacheKeys.put(result.cacheKey, 1);
+            } else {
+              int count = iconCacheKeys.get(result.cacheKey);
+              iconCacheKeys.put(result.cacheKey, count + 1);
             }
-
-
-            // The `anchor` property for the infoWindow
-            if (iconProperty.containsKey("infoWindowAnchor")) {
-              double[] anchor = iconProperty.getDoubleArray("infoWindowAnchor");
-              if (anchor.length == 2) {
-                _setInfoWindowAnchor(marker, anchor[0], anchor[1], imageSize.getInt("width"), imageSize.getInt("height"));
-              }
-            }
-
-            callback.onPostExecute(marker);
-
-          } catch (Exception e) {
-            Log.e(TAG,"PluginMarker: Warning - marker method called when marker has been disposed, wait for addMarker callback before calling more methods on the marker (setIcon etc).");
-            //e.printStackTrace();
-            try {
-              marker.remove();
-            } catch (Exception ignore) {
-              ignore = null;
-            }
-            callback.onError(e.getMessage() + "");
+            //Log.d(TAG, "----> " + result.cacheKey + " = " + iconCacheKeys.get(result.cacheKey));
           }
-        }
-      };
-      task.executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);
-      iconLoadingTasks.add(task);
 
-
-      return;
-    }
-
-    if (iconUrl.indexOf("http") == 0) {
-      //----------------------------------
-      // Load icon from on the internet
-      //----------------------------------
-      int width = -1;
-      int height = -1;
-      if (iconProperty.containsKey("size")) {
-
-        Bundle sizeInfo = (Bundle) iconProperty.get("size");
-        width = sizeInfo.getInt("width", width);
-        height = sizeInfo.getInt("height", height);
-      }
-
-      String cacheKey = AsyncLoadImage.getCacheKey(iconUrl, width, height);
-      objects.put("marker_icon_" + marker.getId(), cacheKey);
-      if (!iconCacheKeys.containsKey(cacheKey)) {
-        iconCacheKeys.put(cacheKey, 1);
-      } else {
-        int count = iconCacheKeys.get(cacheKey);
-        iconCacheKeys.put(cacheKey, count + 1);
-      }
-
-      AsyncLoadImage task = new AsyncLoadImage("Mozilla", width, height, noCaching, new AsyncLoadImageInterface() {
-
-        @Override
-        public void onPostExecute(Bitmap image) {
-
-          if (image == null) {
+          //------------------------
+          // Draw label on icon
+          //------------------------
+          if (iconProperty.containsKey("label")) {
+            result.image = drawLabel(result.image, iconProperty.getBundle("label"));
+          }
+          BitmapDescriptor bitmapDescriptor = BitmapDescriptorFactory.fromBitmap(result.image);
+          if (bitmapDescriptor == null || marker == null || marker.getTag() == null) {
             callback.onPostExecute(marker);
             return;
           }
 
-          if (image.isRecycled()) {
-            //Maybe the task was canceled by map.clean()?
-            callback.onError("Can not get image for marker. Maybe the task was canceled by map.clean()?");
-            return;
+          //------------------------
+          // Sets image as icon
+          //------------------------
+          marker.setIcon(bitmapDescriptor);
+          bitmapDescriptor = null;
+
+          //---------------------------------------------
+          // Save the information for the anchor property
+          //---------------------------------------------
+          Bundle imageSize = new Bundle();
+          imageSize.putInt("width", result.image.getWidth());
+          imageSize.putInt("height", result.image.getHeight());
+          self.pluginMap.objects.remove(markerImgSizeTag);
+          self.pluginMap.objects.put(markerImgSizeTag, imageSize);
+
+          result.image.recycle();
+          result.image = null;
+
+          // The `anchor` of the `icon` property
+          if (iconProperty.containsKey("anchor")) {
+            double[] anchor = iconProperty.getDoubleArray("anchor");
+            if (anchor != null && anchor.length == 2) {
+              _setIconAnchor(marker, anchor[0], anchor[1], imageSize.getInt("width"), imageSize.getInt("height"));
+            }
           }
-          try {
-            icons.add(image);
-            BitmapDescriptor bitmapDescriptor = BitmapDescriptorFactory.fromBitmap(image);
-            marker.setIcon(bitmapDescriptor);
 
-            // Save the information for the anchor property
-            Bundle imageSize = new Bundle();
-            imageSize.putInt("width", image.getWidth());
-            imageSize.putInt("height", image.getHeight());
-            self.objects.put("imageSize", imageSize);
 
-            // The `anchor` of the `icon` property
-            if (iconProperty.containsKey("anchor")) {
-              double[] anchor = iconProperty.getDoubleArray("anchor");
-              if (anchor.length == 2) {
-                _setIconAnchor(marker, anchor[0], anchor[1], imageSize.getInt("width"), imageSize.getInt("height"));
-              }
+          // The `anchor` property for the infoWindow
+          if (iconProperty.containsKey("infoWindowAnchor")) {
+            double[] anchor = iconProperty.getDoubleArray("infoWindowAnchor");
+            if (anchor != null && anchor.length == 2) {
+              _setInfoWindowAnchor(marker, anchor[0], anchor[1], imageSize.getInt("width"), imageSize.getInt("height"));
             }
-
-            // The `anchor` property for the infoWindow
-            if (iconProperty.containsKey("infoWindowAnchor")) {
-              double[] anchor = iconProperty.getDoubleArray("infoWindowAnchor");
-              if (anchor.length == 2) {
-                _setInfoWindowAnchor(marker, anchor[0], anchor[1], imageSize.getInt("width"), imageSize.getInt("height"));
-              }
-            }
-
-            image.recycle();
-            callback.onPostExecute(marker);
-          } catch (Exception e) {
-            //e.printStackTrace();
-            try {
-              marker.remove();
-            } catch (Exception ignore) {
-              ignore = null;
-            }
-            callback.onError(e.getMessage() + "");
           }
+
+          callback.onPostExecute(marker);
         }
-      });
-      task.executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR, iconUrl);
-      iconLoadingTasks.add(task);
-    }
+      }
+    };
+
+    AsyncLoadImage task = new AsyncLoadImage(cordova, webView, options, onComplete);
+    task.execute();
+    iconLoadingTasks.put(taskId, task);
   }
+
 
   private void _setIconAnchor(final Marker marker, double anchorX, double anchorY, final int imageWidth, final int imageHeight) {
     // The `anchor` of the `icon` property
-    anchorX = anchorX * this.density;
-    anchorY = anchorY * this.density;
+    anchorX = anchorX * density;
+    anchorY = anchorY * density;
     final double fAnchorX = anchorX;
     final double fAnchorY = anchorY;
     cordova.getActivity().runOnUiThread(new Runnable() {
@@ -1197,8 +1164,8 @@ public class PluginMarker extends MyPlugin implements MyPluginInterface  {
   }
   private void _setInfoWindowAnchor(final Marker marker, double anchorX, double anchorY, final int imageWidth, final int imageHeight) {
     // The `anchor` of the `icon` property
-    anchorX = anchorX * this.density;
-    anchorY = anchorY * this.density;
+    anchorX = anchorX * density;
+    anchorY = anchorY * density;
     final double fAnchorX = anchorX;
     final double fAnchorY = anchorY;
     cordova.getActivity().runOnUiThread(new Runnable() {
@@ -1208,4 +1175,58 @@ public class PluginMarker extends MyPlugin implements MyPluginInterface  {
       }
     });
   }
+
+  protected Bitmap drawLabel(Bitmap image, Bundle labelOptions) {
+    String text = labelOptions.getString("text");
+    if (text == null || text.length() == 0) {
+      return image;
+    }
+    Bitmap newIcon = Bitmap.createBitmap(image);
+    Canvas canvas = new Canvas(newIcon);
+    image.recycle();
+    image = null;
+
+    int fontSize = 10;
+    if (labelOptions.containsKey("fontSize")) {
+      fontSize = labelOptions.getInt("fontSize");
+    }
+    paint.setTextSize(fontSize * density);
+
+    int color = Color.BLACK;
+    if (labelOptions.containsKey("color")) {
+      color = labelOptions.getInt("color");
+    }
+    boolean bold = false;
+    if (labelOptions.containsKey("bold")) {
+      bold = labelOptions.getBoolean("bold");
+    }
+    paint.setFakeBoldText(bold);
+    boolean italic = false;
+    if (labelOptions.containsKey("italic")) {
+      italic = labelOptions.getBoolean("italic");
+    }
+    if (italic && bold) {
+      paint.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.BOLD_ITALIC));
+    } else if(italic) {
+      paint.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.ITALIC));
+    } else if(bold) {
+      paint.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.BOLD));
+    } else {
+      paint.setTypeface(Typeface.DEFAULT);
+    }
+    paint.setColor(color);
+
+
+    Rect rect = new Rect();
+    canvas.getClipBounds(rect);
+    int cHeight = rect.height();
+    int cWidth = rect.width();
+    paint.setTextAlign(Paint.Align.LEFT);
+    paint.getTextBounds(text, 0, text.length(), rect);
+    float x = cWidth / 2f - rect.width() / 2f - rect.left;
+    float y = cHeight / 2f + rect.height() / 2f - rect.bottom;
+    canvas.drawText(text, x, y, paint);
+    return newIcon;
+  }
+
 }

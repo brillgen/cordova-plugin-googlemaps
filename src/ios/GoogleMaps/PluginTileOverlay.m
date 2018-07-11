@@ -1,5 +1,5 @@
 //
-//  PluginTileOverlay.m
+//  PluginPluginTileOverlay.m
 //  cordova-googlemaps-plugin v2
 //
 //  Created by Masashi Katsumata.
@@ -10,14 +10,18 @@
 
 @implementation PluginTileOverlay
 
--(void)setGoogleMapsViewController:(GoogleMapsViewController *)viewCtrl
+-(void)setPluginViewController:(PluginViewController *)viewCtrl
 {
-  self.mapCtrl = viewCtrl;
+  self.mapCtrl = (PluginMapViewController *)viewCtrl;
 }
 - (void)pluginInitialize
 {
+  if (self.initialized) {
+    return;
+  }
+  self.initialized = YES;
+  [super pluginInitialize];
   // Initialize this plugin
-  self.objects = [[NSMutableDictionary alloc] init];
   self.imgCache = [[NSCache alloc]init];
   self.imgCache.totalCostLimit = 3 * 1024 * 1024 * 1024; // 3MB = Cache for image
   self.executeQueue =  [NSOperationQueue new];
@@ -35,19 +39,18 @@
 
 
   // Plugin destroy
-  NSArray *keys = [self.objects allKeys];
+  NSArray *keys = [self.mapCtrl.objects allKeys];
   NSString *key;
   for (int i = 0; i < [keys count]; i++) {
       key = [keys objectAtIndex:i];
       if ([key hasPrefix:@"tileoverlay_property"]) {
         key = [key stringByReplacingOccurrencesOfString:@"_property" withString:@""];
-        GMSTileLayer *tileoverlay = (GMSTileLayer *)[self.objects objectForKey:key];
+        GMSTileLayer *tileoverlay = (GMSTileLayer *)[self.mapCtrl.objects objectForKey:key];
         tileoverlay.map = nil;
         tileoverlay = nil;
       }
-      [self.objects removeObjectForKey:key];
+      [self.mapCtrl.objects removeObjectForKey:key];
   }
-  self.objects = nil;
 
   [self.imgCache removeAllObjects];
   self.imgCache = nil;
@@ -55,7 +58,7 @@
   key = nil;
   keys = nil;
 
-  NSString *pluginId = [NSString stringWithFormat:@"%@-tileoverlay", self.mapCtrl.mapId];
+  NSString *pluginId = [NSString stringWithFormat:@"%@-tileoverlay", self.mapCtrl.overlayId];
   CDVViewController *cdvViewController = (CDVViewController*)self.viewController;
   [cdvViewController.pluginObjects removeObjectForKey:pluginId];
   [cdvViewController.pluginsMap setValue:nil forKey:pluginId];
@@ -69,11 +72,12 @@
   dispatch_async(dispatch_get_main_queue(), ^{
 
       NSDictionary *json = [command.arguments objectAtIndex:1];
+      NSString *idBase = [command.arguments objectAtIndex:2];
       //NSString *tileUrlFormat = [json objectForKey:@"tileUrlFormat"];
 
 
       GMSTileLayer *layer;
-      NSString *_id = [NSString stringWithFormat:@"tileoverlay_%@", [json valueForKey:@"_id"]];
+      NSString *_id = [NSString stringWithFormat:@"tileoverlay_%@", idBase];
 
       //NSRange range = [tileUrlFormat rangeOfString:@"http"];
       //if (range.location != 0) {
@@ -90,11 +94,12 @@
           }
           NSString *webPageUrl = url.absoluteString;
           [options setObject:webPageUrl forKey:@"webPageUrl"];
-          [options setObject:self.mapCtrl.mapId forKey:@"mapId"];
-          [options setObject:[json valueForKey:@"_id"] forKey:@"pluginId"];
+          [options setObject:self.mapCtrl.overlayId forKey:@"mapId"];
+          [options setObject:idBase forKey:@"pluginId"];
 
           ///[options setObject:tileUrlFormat forKey:@"tileUrlFormat"];
           [options setObject:[json objectForKey:@"tileSize"] forKey:@"tileSize"];
+          [options setObject:[json objectForKey:@"debug"] forKey:@"debug"];
 
           layer = [[PluginTileProvider alloc] initWithOptions:options webView:webview];
       /*
@@ -112,8 +117,13 @@
 
 
 
-
-      if ([[json valueForKey:@"visible"] boolValue]) {
+      // Visible property
+      NSString *visibleValue = [NSString stringWithFormat:@"%@",  json[@"visible"]];
+      if ([@"0" isEqualToString:visibleValue]) {
+        // false
+        layer.map = nil;
+      } else {
+        // true or default
         layer.map = self.mapCtrl.map;
       }
       if ([json valueForKey:@"zIndex"]) {
@@ -129,11 +139,10 @@
 
       [self.executeQueue addOperationWithBlock:^{
 
-          [self.objects setObject:layer forKey:_id];
+          [self.mapCtrl.objects setObject:layer forKey:_id];
 
           NSMutableDictionary *result = [[NSMutableDictionary alloc] init];
           [result setObject:_id forKey:@"id"];
-          [result setObject:[NSString stringWithFormat:@"%lu", (unsigned long)layer.hash] forKey:@"hashCode"];
 
           CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsDictionary:result];
           [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
@@ -147,15 +156,16 @@
 
   [self.executeQueue addOperationWithBlock:^{
     NSString *_id = [command.arguments objectAtIndex:0];
-    NSString *tileUrl = [command.arguments objectAtIndex:1];
+    NSString *urlKey = [command.arguments objectAtIndex:1];
+    NSString *tileUrl = [command.arguments objectAtIndex:2];
     NSString *pluginId = [NSString stringWithFormat:@"tileoverlay_%@", _id];
-    GMSTileLayer *tileLayer = [self.objects objectForKey:pluginId];
+    GMSTileLayer *tileLayer = [self.mapCtrl.objects objectForKey:pluginId];
 
 
     CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK];
     if (tileLayer) {
         PluginTileProvider *localLayer =(PluginTileProvider *)tileLayer;
-        [localLayer onGetTileUrlFromJS:tileUrl];
+        [localLayer onGetTileUrlFromJS:urlKey tileUrl:tileUrl];
     }
     [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
 
@@ -171,7 +181,7 @@
 
   [self.executeQueue addOperationWithBlock:^{
       NSString *tileLayerKey = [command.arguments objectAtIndex:0];
-      GMSTileLayer *layer = (GMSTileLayer *)[self.objects objectForKey:tileLayerKey];
+      GMSTileLayer *layer = (GMSTileLayer *)[self.mapCtrl.objects objectForKey:tileLayerKey];
       Boolean isVisible = [[command.arguments objectAtIndex:1] boolValue];
       dispatch_async(dispatch_get_main_queue(), ^{
           if (isVisible) {
@@ -197,10 +207,10 @@
   [self.executeQueue addOperationWithBlock:^{
       NSString *tileLayerKey = [command.arguments objectAtIndex:0];
       dispatch_async(dispatch_get_main_queue(), ^{
-          GMSTileLayer *layer = (GMSTileLayer *)[self.objects objectForKey:tileLayerKey];
+          GMSTileLayer *layer = (GMSTileLayer *)[self.mapCtrl.objects objectForKey:tileLayerKey];
           layer.map = nil;
           [layer clearTileCache];
-          [self.objects removeObjectForKey:tileLayerKey];
+          [self.mapCtrl.objects removeObjectForKey:tileLayerKey];
           layer = nil;
       });
 
@@ -219,7 +229,7 @@
 {
   [self.executeQueue addOperationWithBlock:^{
       NSString *tileLayerKey = [command.arguments objectAtIndex:0];
-      GMSTileLayer *layer = (GMSTileLayer *)[self.objects objectForKey:tileLayerKey];
+      GMSTileLayer *layer = (GMSTileLayer *)[self.mapCtrl.objects objectForKey:tileLayerKey];
       NSInteger zIndex = [[command.arguments objectAtIndex:1] integerValue];
       dispatch_async(dispatch_get_main_queue(), ^{
           [layer setZIndex:(int)zIndex];
@@ -238,7 +248,7 @@
 
   [self.executeQueue addOperationWithBlock:^{
       NSString *tileLayerKey = [command.arguments objectAtIndex:0];
-      GMSTileLayer *layer = (GMSTileLayer *)[self.objects objectForKey:tileLayerKey];
+      GMSTileLayer *layer = (GMSTileLayer *)[self.mapCtrl.objects objectForKey:tileLayerKey];
       Boolean isEnabled = [[command.arguments objectAtIndex:1] boolValue];
       dispatch_async(dispatch_get_main_queue(), ^{
           [layer setFadeIn:isEnabled];
@@ -260,7 +270,7 @@
 
   [self.executeQueue addOperationWithBlock:^{
       NSString *tileLayerKey = [command.arguments objectAtIndex:0];
-      GMSTileLayer *layer = (GMSTileLayer *)[self.objects objectForKey:tileLayerKey];
+      GMSTileLayer *layer = (GMSTileLayer *)[self.mapCtrl.objects objectForKey:tileLayerKey];
       double opacity = [[command.arguments objectAtIndex:1] doubleValue];
       dispatch_async(dispatch_get_main_queue(), ^{
           [layer setOpacity:opacity];

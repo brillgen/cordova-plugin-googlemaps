@@ -2,7 +2,7 @@
 //  Environment.h
 //  cordova-googlemaps-plugin v2
 //
-//  Created by masashi.
+//  Created by Masashi Katsumata.
 //
 //
 
@@ -14,5 +14,4 @@
 - (void)isAvailable:(CDVInvokedUrlCommand*)command;
 - (void)setBackGroundColor:(CDVInvokedUrlCommand*)command;
 - (void)getLicenseInfo:(CDVInvokedUrlCommand*)command;
-- (void)setDebuggable:(CDVInvokedUrlCommand*)command;
 @end

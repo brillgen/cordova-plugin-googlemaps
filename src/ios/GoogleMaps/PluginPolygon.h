@@ -1,17 +1,16 @@
 //
-//  Polygon.h
+//  PluginPolygon.h
 //  cordova-googlemaps-plugin v2
 //
-//  Created by masashi.
+//  Created by Masashi Katsumata.
 //
 //
 
 #import "CordovaGoogleMaps.h"
-#import "MyPlgunProtocol.h"
-@interface PluginPolygon : CDVPlugin<MyPlgunProtocol>
-@property (nonatomic, strong) GoogleMapsViewController* mapCtrl;
-@property (nonatomic) NSMutableDictionary* objects;
-@property (nonatomic) NSOperationQueue *executeQueue;
+#import "IPluginProtocol.h"
+@interface PluginPolygon : CDVPlugin<IPluginProtocol>
+@property (nonatomic, strong) PluginMapViewController* mapCtrl;
+@property (nonatomic) BOOL initialized;
 
 - (void)create:(CDVInvokedUrlCommand*)command;
 - (void)setFillColor:(CDVInvokedUrlCommand*)command;
@@ -19,10 +18,12 @@
 - (void)setStrokeWidth:(CDVInvokedUrlCommand*)command;
 - (void)removePointAt:(CDVInvokedUrlCommand*)command;
 - (void)setPointAt:(CDVInvokedUrlCommand*)command;
+- (void)setPoints:(CDVInvokedUrlCommand*)command;
 - (void)insertPointAt:(CDVInvokedUrlCommand*)command;
 - (void)setPointOfHoleAt:(CDVInvokedUrlCommand*)command;
 - (void)removePointOfHoleAt:(CDVInvokedUrlCommand*)command;
 - (void)insertPointOfHoleAt:(CDVInvokedUrlCommand*)command;
+- (void)setHoles:(CDVInvokedUrlCommand*)command;
 - (void)setZIndex:(CDVInvokedUrlCommand*)command;
 - (void)setClickable:(CDVInvokedUrlCommand*)command;
 - (void)setVisible:(CDVInvokedUrlCommand*)command;
